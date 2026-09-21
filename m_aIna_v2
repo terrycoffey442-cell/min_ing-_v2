@@ -179,11 +179,17 @@ pcall(function()
       src .. " end)")
 end)
 
+-- Chỉ 1 bản chạy: mỗi lần chạy script tăng generation; bản nào thấy generation không còn là của mình thì tự dừng.
+-- (queue_on_teleport xếp chồng: sau teleport MỌI bản đã queue cùng chạy trong 1 giây -> check _SpaceMineBot bị race, 2-3 bot đánh nhau. VERIFIED 21/09)
+getgenv()._SpaceMineGen = (getgenv()._SpaceMineGen or 0) + 1
+local MyGen = getgenv()._SpaceMineGen
+local function Latest() return getgenv()._SpaceMineGen == MyGen end
 -- dừng bản đang chạy
 if getgenv()._SpaceMineBot then
     pcall(function() getgenv()._SpaceMineBot.Stop("restart") end)
     task.wait(1)
 end
+if not Latest() then return end -- có bản mới hơn vừa chạy trong lúc chờ
 
 -- ============================================================
 -- Services / modules
@@ -226,6 +232,7 @@ local Bot = {
     outsideAt = 0, outsideN = 0, topAt = 0,
 }
 getgenv()._SpaceMineBot = Bot
+local function Alive() return Bot.running and Latest() end
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
 
 -- ============================================================
@@ -960,7 +967,7 @@ local function HideEggAnim()
     task.spawn(function()
         local ok, Variables = pcall(function() return require(RS.Library:WaitForChild("Variables", 3)) end)
         if not ok or type(Variables) ~= "table" then return end
-        while Bot.running do
+        while Alive() do
             pcall(function() Variables.OpeningEgg = 0 end)
             task.wait(0.5)
         end
@@ -1031,8 +1038,10 @@ local function MagnetPatch()
         local E = require(Client:WaitForChild("EnchantCmds", 5))
         if type(E.GetPower) ~= "function" then return end
         pcall(setreadonly, E, false)
-        magnetOrig = { E = E, GetPower = E.GetPower }
-        local raw = E.GetPower
+        local SO = getgenv()._SpaceMineOrig
+        SO.GetPower = SO.GetPower or E.GetPower
+        magnetOrig = { E = E, GetPower = SO.GetPower }
+        local raw = SO.GetPower
         E.GetPower = function(name, ...)
             if name == "Super Magnet" or name == "Magnet" then return 9999 end
             return raw(name, ...)
@@ -1041,7 +1050,7 @@ local function MagnetPatch()
     end)
 end
 local function MagnetUnpatch()
-    if magnetOrig then pcall(function() magnetOrig.E.GetPower = magnetOrig.GetPower end) magnetOrig = nil end
+    if magnetOrig and Latest() then pcall(function() magnetOrig.E.GetPower = magnetOrig.GetPower end) magnetOrig = nil end
 end
 
 -- Mailbox (21/09): remote tên obfuscate THEO SERVER (phiên này YS_Load = tải hộp thư -> {Inbox={{uuid=...}}}, RD_Ingest = Claim All với list uuid;
@@ -1554,6 +1563,8 @@ BlockDamage = function(b)
     local ok3, dmg3 = pcall(PickaxeUtil.GetPickaxeDamage, lp, dir)
     return (ok3 and tonumber(dmg3) and dmg3 > 0) and dmg3 or 1
 end
+-- hàm gốc lưu ở getgenv (dùng chung mọi bản chạy) -> restart không bọc wrapper chồng wrapper, unpatch luôn về đúng hàm gốc
+getgenv()._SpaceMineOrig = getgenv()._SpaceMineOrig or {}
 local holdOrig = {}
 local function HoldPatch()
     if holdOrig.done then return true end
@@ -1561,8 +1572,11 @@ local function HoldPatch()
         local BI = require(Client.ToolCmds:WaitForChild("BlockInteraction", 5))
         local GI = require(Client.ToolCmds.MiningFrontend:WaitForChild("GenericInput", 5))
         pcall(setreadonly, BI, false) pcall(setreadonly, GI, false)
+        local SO = getgenv()._SpaceMineOrig
+        SO.GetSelectedBlock = SO.GetSelectedBlock or BI.GetSelectedBlock
+        SO.IsInputDown = SO.IsInputDown or GI.IsInputDown
         holdOrig.BI, holdOrig.GI = BI, GI
-        holdOrig.GetSelectedBlock, holdOrig.IsInputDown = BI.GetSelectedBlock, GI.IsInputDown
+        holdOrig.GetSelectedBlock, holdOrig.IsInputDown = SO.GetSelectedBlock, SO.IsInputDown
         BI.GetSelectedBlock = function(...)
             local h = Bot.hold
             if h then return h end
@@ -1579,7 +1593,7 @@ local function HoldPatch()
 end
 local function HoldUnpatch()
     Bot.hold = nil
-    if not holdOrig.done then return end
+    if not holdOrig.done or not Latest() then return end -- bản mới hơn đang dùng patch -> không trả về gốc
     pcall(function()
         holdOrig.BI.GetSelectedBlock = holdOrig.GetSelectedBlock
         holdOrig.GI.IsInputDown = holdOrig.IsInputDown
@@ -1613,7 +1627,7 @@ local function MineBlock(loc, b, sync)
     end
     local lastDmg, lastDmgAt, lastUI = -1, t0, 0
     while os.clock() - t0 < timeout do
-        if not Bot.running then Bot.hold = nil Bot.target = nil return false end
+        if not Alive() then Bot.hold = nil Bot.target = nil return false end
         if not b.Part or b.Part.Parent == nil then
             Bot.hold = nil Bot.target = nil
             Confirm(b, id, t0)
@@ -1720,7 +1734,7 @@ local function MainLoop()
     local respawnLogged = false
     local idleStrikes, lastBrokenMark = 0, -1
 
-    while Bot.running do
+    while Alive() do
         if not _UC["Enabled"] then SetStatus("paused") task.wait(1) continue end
         if not EnsureInstance() then task.wait(3) continue end
         if not EnsurePickaxe() then SetStatus("no pickaxe") task.wait(3) continue end
@@ -2050,6 +2064,7 @@ local function MainLoop()
         lastBrokenMark = Stats.broken
     end
     SetStatus("stopped")
+    if Bot.running and not Latest() then Bot.Stop("bản mới hơn đang chạy") end
     Log("Stopped.")
 end
 
@@ -2074,7 +2089,7 @@ UIS.InputBegan:Connect(function(input, gp)
 end)
 
 task.spawn(function()
-    while Bot.running do
+    while Alive() do
         local ok, err = pcall(MainLoop)
         if not ok then
             Log("CRASH: %s -> restart sau 3s", tostring(err))
