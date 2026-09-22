@@ -1,125 +1,158 @@
 --!nocheck
 -- ============================================================
--- 💎 SPACE MINE ORE SWEEP v3.1  –  Pet Simulator 99 (Space Mining Event, U94)
---   Farm quặng độc lập: vào event → tele tới khu → tele tới từng quặng đang load trong mine
---   (mọi độ sâu) → phá bằng commit → auto combine gem (Moonstone→Star Ruby→Helium-3→Nebulite→Dark Matter)
---   Chạy: execute / live-reload. Dừng: phím Stop Key hoặc getgenv()._OreSweep.Stop()
---   KHÔNG chạy cùng lúc với main_mining2.lua (2 script cùng set target sẽ đánh nhau)
+-- ⛏️  SPACE MINE KAITUN  –  Pet Simulator 99 (Update 94, 09/2026)
+--     Auto: vào event → nhận pickaxe free (acc mới) / chọn pickaxe → đào (ưu tiên ore + block quest)
+--           → xuống layer → mở khu → claim quest pickaxe → mua Event Upgrade
+--           → dùng booster → merchant TNT → Combine-O-Matic (tuỳ chọn)
+--           → mở egg event bằng Space Coins (10-20 s/lần) → máy Gold/Rainbow pet event (khu 1)
+--     Core đào đã verify ~350-480 block/phút, 0 từ chối (xem FLOW.md)
+--
+--   Cách dùng (bản bán): đặt getgenv().SpaceMineConfig = { ... } TRƯỚC khi loadstring; key nào không đặt sẽ lấy mặc định (DEF) bên dưới.
+--   Ví dụ:   getgenv().SpaceMineConfig = { ["Target Zone"] = 3, ["Auto Egg"] = true }
+--            getgenv().SpaceMineLoader = 'loadstring(game:HttpGet("https://.../main.lua"))()'  -- (tuỳ chọn) để tự chạy lại sau teleport
+--            loadstring(game:HttpGet("https://.../main.lua"))()
 -- ============================================================
-getgenv().OreSweepConfig = getgenv().OreSweepConfig or {}
+getgenv().SpaceMineConfig = type(getgenv().SpaceMineConfig) == "table" and getgenv().SpaceMineConfig or {}
 local DEF = {
-    ["Enabled"]        = true,
-    ["Auto Join"]      = true,     -- tự vào event Space Mining nếu đang ở ngoài
-    ["Target Zone"]    = 5,        -- khu muốn farm (1-5); tự hạ xuống khu cao nhất đã mở
-    ["Ores"]           = { Sapphire = true, Ruby = true, Emerald = true, Amethyst = true, Rainbow = true },
-                                   -- Sapphire->Moonstone, Ruby->Star Ruby, Emerald->Helium-3, Amethyst->Nebulite, Rainbow("Dark Matter Ore")->Dark Matter Gem + 5.000.000 SpaceCoins
-                                   -- (VERIFIED 22/09: hold-patch PHÁ ĐƯỢC Amethyst/Rainbow - ghi chú cũ "server không cho phá" là của thời commit thủ công, đã sai.
-                                   --  8 Amethyst -> 1 trong 180 s, Nebulite +8. Đáng: 1 Nebulite = 400 Moonstone = ~400 cục Sapphire; 1 Dark Matter = 20 Nebulite)
-    ["Max Sec"]        = 90,       -- bỏ quặng cần > N giây (HP/damage). Helium-3 Pickaxe: Sapphire 0.13s, Emerald 0.2s, Amethyst 20.1s, Rainbow 80.6s
-                                   -- -> 20 cũ loại luôn Amethyst (sát nút 20.1s!). Pickaxe yếu thì chính ngưỡng này tự loại quặng cứng, khỏi sửa Ores
-    ["Min Ores"]       = 1,        -- có >= N quặng lộ mặt mới quét (3 cũ = đứng "chờ quặng" dù còn 1-2 cục ngay cạnh - VERIFIED 21/09)
-    ["Ore Age"]        = 2,        -- giây: quặng mới xuất hiện phải >= N giây mới đào (block kề stream về sau quặng -> tránh ghost)
-    ["Break Wait Min"] = 1.5,      -- giây chờ server xoá block sau khi client commit (server nhàn 0.1-0.3 s, server tải nặng đo được 1.5-4.3 s @ping 100 ms)
-    ["Break Wait Max"] = 6,        -- trần cho ngưỡng tự học; hết ngần này mà Part còn = ghost thật (quặng server coi là bị chôn)
-    ["Resync On Ghost"] = 6,       -- ghost liên tiếp N cục = bản mine của client lệch với server (block "ma": client còn, server đã xoá)
-                                   -- -> rời + vào lại event cho world nạp lại (1 s, KHÔNG teleport nên không cần inject lại). 0 = tắt
-    ["Hop Wait"]       = 0.2,      -- giây chờ sau mỗi tele tới quặng cho server nhận vị trí (VERIFIED 22/09 A/B mine cạn: 0.35 cũ = 1/3 thời gian farm ~139/phút; 0.1 = ghost 4-6% -> 124/phút; 0.2 = 0 ghost, 206/phút)
-    ["Dig Buried"]     = true,     -- hết quặng lộ -> đứng lên đỉnh cột trên quặng bị chôn, đào thẳng xuống cho lộ mặt rồi lấy (VERIFIED 22/09: đào block dưới chân = rơi xuống block kế, ~0.15 s/Gold)
-    ["Dig Max Depth"]  = 30,       -- chỉ khoan tới quặng cách đỉnh cột <= N block
-    ["Zone Rotate"]    = false,    -- (22/09 mặc định TẮT) mine reset theo TỪNG khu: khu thấp cạn riêng, mỗi lần ghé tốn ~6 s mà thường 0 quặng -> hop thẳng. true = vẫn quét 5->4->3->2->1
-    ["Rotate Skip Empty"] = 300,   -- giây: khu ghé mà không được quặng nào thì bỏ qua N giây (server cạn: khu 4-1 chỉ còn respawn nhỏ giọt, mỗi lần ghé phí ~6 s)
-    ["Server Hop"]     = false,    -- (Real: sau teleport phải inject lại -> mặc định tắt; executor có queue_on_teleport chuẩn thì bật) mine cạn -> nhảy server khác (mine mới ~16k block, ~1000 quặng). Script tự chạy lại sau hop
-    ["Hop Instead Of Rotate"] = true, -- bật Server Hop thì khu gốc sạch là hop LUÔN, không quét 4/3/2/1 (server cạn: khu thấp chỉ còn 0-5 quặng/lượt, phí ~30 s/vòng). false = quét hết 5 khu rồi mới hop
-    ["Hop After"]      = 120,      -- giây: chỉ hop khi đã vào server >= N giây (tránh hop liên tục lúc mới vào)
-    ["Hop Prefer Empty"] = true,   -- chọn server ít người qua games.roblox.com (mine ít bị đào); false = Teleport ngẫu nhiên
-    ["Hop Memory"]     = 7200,     -- giây nhớ server đã vào (file space_mine_servers.txt) để không nhảy trùng; 0 = tắt
-    ["Hop If Mine Dead"] = 8000,   -- vào server mới: mine còn < N block = ĐÃ BỊ VÉT (mine đầy ~16.7k, server cạn còn vài trăm) -> hop tiếp ngay, không phí 2 phút farm thử
-    ["Hop After Empty"] = 60,      -- giây liên tục không có quặng nào mà mine vẫn còn block (chỉ đang chờ respawn) thì mới hop
-    ["Hop Pages"]      = 4,        -- số trang server list quét mỗi lần hop (100 server/trang, Asc/Desc ngẫu nhiên -> mỗi lần thấy bộ server khác)
-                                   -- games.roblox.com rate-limit 429 rất dễ dính -> danh sách dư được cache ra file, lần hop sau dùng luôn không gọi API
-    ["Slow Last"]      = true,     -- quặng lâu (> 5 s) để sau cùng
-    ["Idle Mine"]      = false,    -- true = hết quặng thì đào block thường quanh chỗ đứng (lộ quặng mới, ăn coins); false = chỉ tele quặng, hết thì chờ
-    ["Idle Max Sec"]   = 3,        -- Idle Mine chỉ đào block cần <= N giây (Gold 0.1 s, Magma 0.4 s...)
-    ["Idle Wait"]      = 5,        -- giây nghỉ khi không đào được gì
-    ["Auto Combine"]   = false,     -- true = tự combine ở máy Combine-O-Matic (script tự tele lên Pad máy khu 5, bấm UI, rồi tele về)
-    ["Combine"]        = {         -- bật/tắt từng recipe (số lượng cần đọc từ UI máy, đã trừ upgrade Ore Savings)
-        ["Star Ruby Gem"]             = true,   -- 1: 20 Moonstone Gem   -> Star Ruby Gem
-        ["Helium-3 Gem"]              = true,   -- 2: Star Ruby Gem      -> Helium-3 Gem
-        ["Nebulite Gem"]              = true,   -- 3: Helium-3 Gem       -> Nebulite Gem
-        ["Dark Matter Gem"]           = true,   -- 4: 20 Nebulite Gem    -> Dark Matter Gem
-        ["Combine Egg"]               = true,   -- 10: 30 Dark Matter Gem -> quay 1 Huge ngẫu nhiên (Moon Mining Cat 100 / Malachite Koi 25 / Comet Carbuncle 5 /
-                                                --     Titanic Pony cap 4000; kèm Gold x0.2, Rainbow x0.04, Shiny x0.008). Pet vào túi, không có item "Combine Egg".
-        -- (22/09) rung 5-9 cũ (Dark Matter -> Huge Cat -> Koi -> Carbuncle -> Titanic -> Garg) bị game tắt bằng FFlag SpaceMineCraftingN_Enabled,
-        -- nút không render nữa. Garg giờ lấy qua "Garg Machine" trên cùng Pad (nộp Huge lấy điểm -> Garg Egg), script chưa làm.
-    },
-    ["Combine Keep"]   = 0,        -- giữ lại N input mỗi recipe (0 = combine sạch)
-    ["Combine Every"]  = 300,      -- giây giữa 2 lần lên máy
-    ["Auto Bomb"]      = false,    -- ném bom mine trong túi (Consumable) tại chỗ đứng để phá block quanh quặng / lộ thêm quặng
-    ["Bomb Use"]       = { "Stardust Charge", "Void Charge", "Breach Charge", "Core Charge", "Drill Array", "Rover Charge" },
-                                   -- xoay vòng các loại đang có (VERIFIED 22/09: debounce server ~1 s, mọi loại dùng chung). Stardust = SpawnOre (sinh quặng, budget 560),
-                                   -- Void = nổ cầu 320 block, Core = khoan xuống 20 tầng, Drill = mảng 220, Breach = xuyên lên/xuống 15, Rover = 3 lần 140.
-                                   -- "Big Bang" (1436 block, mua bằng Helium-3, chỉ 1 quả/lúc) không nằm mặc định -> tự thêm vào list nếu muốn.
-    ["Bomb Every"]     = 5,        -- giây giữa 2 quả (server cho ~1 s; 5 s ~ 720 quả/giờ)
-    ["Auto Merchant"]  = true,     -- mua TNT ở Space Mine Merchant bằng Space Coins (mua từ xa; Rover/Drill/Core/Breach Charge, Big Bang; refresh 600 s)
-    ["Merchant Slots"] = 6,        -- thử mua slot 1..N mỗi chu kỳ (server tự từ chối slot khoá/hết hàng)
-    ["Merchant Every"] = 120,      -- giây
-    ["Merchant Reserve"] = 0,      -- chỉ mua khi Space Coins > N
-    ["Auto Free Gifts"] = true,    -- tự claim Free Rewards (12 quà theo giờ chơi, chance Huge/Titanic) khi đủ giờ, kiểm tra mỗi 60 s
-    ["Anti AFK"]       = true,
-    ["Show UI"]        = true,
-    ["UI Black Screen"] = true,    -- true = dashboard đen full màn hình + tắt render 3D (nút góc phải để ẩn); false = panel nhỏ
-    ["Webhook URL"]    = "",        -- Discord webhook (rỗng = tắt): stats lúc start + mỗi Webhook Every + khi có Huge/Titanic/Gargantuan
-    ["Webhook Every"]  = 1200,      -- giây
-    ["Discord Tag ID"] = "",       -- <@id> khi có pet mới
-    ["Stop Key"]       = Enum.KeyCode.P,
-    ["Debug"]          = false,
+    ["Enabled"]          = true,     -- false = dừng
+    ["Speed"]            = "fast",   -- "fast" = đệm 0.04 s giữa block (~450+/phút) | "safe" = 0.08 s (0 từ chối đã verify)
+    ["Target Zone"]      = 5,        -- khu muốn farm tới (1-5). Bot tự mở khu khi đủ coins + gate quest
+    ["Pickaxe First"]    = true,     -- ở lại khu N cho tới khi nhận pickaxe của quest N rồi mới sang khu N+1
+    ["Hop Far Blocks"]   = false,    -- true = hop tới block thường còn sót ngoài tầm 39 stud để vét trọn layer (chậm xuống ~30%) | false = chỉ vét trong tầm rồi xuống
+    ["Hop Far Ore"]      = true,     -- hop tới ore ngoài tầm (mọi layer) khi trong tầm hết block
+    ["Ore First"]        = false,    -- (tele quặng toàn mine đã tách sang ore_sweep.lua – chạy song song, nó tự tạm dừng bot khi quét) true = bot tự đi lấy ore xa trước
+    ["Any On Top"]       = true,     -- hết ore mà đang đứng ở tầng block chậm (Magma 1 s, Obsidian 6.6 s) và quest chỉ cần "any" -> về mặt farm tầng nhanh (Gold 0.1 s)
+    ["Auto Mine Quest"]  = true,     -- quest cần đá không có ở layer này (vd Gold ở sâu) -> bật Auto Mine của game để đào xuống nhanh (20 layer/10 s) tới tầng có đá đó
+    ["Max Block Sec"]    = 30,       -- bỏ qua block THƯỜNG cần > N giây server (HP / damage): Obsidian ~7 s (Laser) còn đào, Elderstone ~9 phút thì bỏ
+    ["Max Ore Sec"]      = 20,       -- ore cần > N giây server thì bỏ. Amethyst/Rainbow (1000 HP) server KHÔNG phá bằng commit (test 20/09) -> giữ 20 để loại chúng; Nebulite lấy bằng combine He-3
+    ["Quest Max Sec"]    = 120,      -- block/ore mà quest pickaxe hoặc gate đang cần thì được nới tới N giây (acc mới: Scrap Pickaxe đào Sapphire ~29 s, quest 1 cần 1 Sapphire)
+    ["Hard Rock Last"]   = true,     -- quest còn phần "any" (phá N block bất kỳ) -> CHỈ full-clear tầng trên (block mềm, ~500/phút); mọi nhu cầu đá quest/gate (Gold/Magma...: Auto Mine, đào hẹp) làm SAU khi đủ "any"
+    ["Quest Dig Radius"] = 12,       -- (fallback khi Auto Mine Quest = false) stud. Quest cần đá KHÔNG có ở layer hiện tại thì chỉ vét trong bán kính này (12 ≈ 5x5 block) để xuống nhanh; 0 = tắt
+    ["Auto Unlock Zone"] = true,     -- tự mua cổng khu kế tiếp
+    ["Auto Quest"]       = true,     -- tự claim quest pickaxe (Steel → Helium-3)
+    ["Auto Upgrade"]     = true,     -- mua Event Upgrade bằng Helium-3 Gem (Ore Savings trước, rồi Better Variants)
+    ["Upgrade Reserve"]  = 0,        -- giữ lại N Helium-3 Gem không dùng mua upgrade
+    ["Auto Booster"]     = false,    -- tự dùng Space Mining Coins/Damage/Speed Booster trong túi
+    ["Auto Merchant"]    = true,     -- mua TNT ở Mining Merchant bằng Space Coins (mua được từ xa; merchant chỉ bán Drill Array/Rover/Core/Breach Charge/Big Bang, refresh 600 s)
+    ["Merchant Slots"]   = 6,        -- thử mua slot 1..N mỗi chu kỳ (slot mở theo respect level, server tự từ chối slot khoá/hết hàng)
+    ["Auto Bomb"]        = true,     -- tự dùng TNT trong túi khi đang ở trong mine (Rover Charge ~50 block/4 s; Drill Array 5 giếng; Breach nổ trên/dưới)
+    ["Bomb Use"]         = { "Rover Charge", "Drill Array", "Breach Charge", "Big Bang" }, -- thứ tự ưu tiên; Core Charge (khoan 20 layer) chỉ dùng khi cần đào xuống tìm đá quest
+    ["Bomb Every"]       = 6,        -- giây giữa 2 lần dùng bom (bom nổ song song, bot vẫn đào)
+    ["Merchant Reserve"] = 600000,   -- chỉ mua khi Space Coins > N (để dành mở cổng khu 5 = 500k)
+    ["Auto Combine"]     = true,     -- Combine-O-Matic gem qua UI máy (bấm nút recipe + OkOne, không cần đứng gần): Moonstone→Star Ruby→Helium-3→Nebulite→Dark Matter
+    ["Combine Up To"]    = 4,        -- rung tối đa (1=Star Ruby, 2=Helium-3, 3=Nebulite, 4=Dark Matter, 5=Huge Moon Mining Cat...)
+    ["Combine Keep"]     = 50,       -- giữ lại N gem input mỗi loại (cho upgrade)
+    ["Equip Best Pets"]  = true,     -- SM_Optimize lúc khởi động + sau khi mở egg / gold / rainbow
+    -- Egg event (mua bằng Space Coins, đứng cạnh egg của khu): pet event cộng damage đào (Cat +50 ... Fox +3900, Golem +20000)
+    ["Auto Egg"]         = false,     -- tự mở egg mỗi Egg Every giây (bot tele lên egg, mở, tele về chỗ đang đào)
+    ["Egg"]              = "auto",   -- "auto" = egg của khu cao nhất đã mở | "Moonstone Egg" (100) | "Star Ruby Egg" (300) | "Helium-3 Egg" (1000) | "Nebulite Egg" (2000) | "Dark Matter Egg" (4000)
+    ["Egg Every"]        = { 30, 60 }, -- giây giữa 2 lần mở (random trong khoảng). Mỗi chuyến egg+máy tốn ~6-8 s đào -> để thưa cho đỡ mất tốc độ
+    ["Egg Count"]        = "max",    -- số trứng mỗi lần: "max" = tối đa slot hatch | số
+    ["Egg Reserve"]      = 0,        -- giữ lại N Space Coins không mua egg
+    ["Egg Keep Gate"]    = true,     -- true = để dành đủ tiền mở cổng khu kế tiếp trước (khu 3 = 25k, 4 = 125k, 5 = 500k) rồi mới mua egg
+    ["Hide Egg Anim"]    = true,     -- ẩn animation mở trứng ("Click to open!") + popup kết quả (như map_auto: GlobalInstantHatch + xoá EggOpening GUI)
+    ["Auto Free Gifts"]  = true,     -- tự claim Free Rewards (12 quà theo giờ chơi, chance Huge/Titanic) khi tới giờ
+    ["Auto Mail"]        = true,     -- tự claim thư trong Mailbox (quà bạn bè gửi) nếu có
+    ["Mail Every"]       = 300,      -- giây giữa 2 lần kiểm tra hộp thư
+    ["Auto Magnet"]      = true,     -- hút orb: patch EnchantCmds.GetPower("Magnet"/"Super Magnet") = 9999 (như map_auto AutoMagnetBypass)
+    -- Máy Gold / Rainbow (khu 1, đứng lên Pad): pet event Gold x1.5 damage, Rainbow x2. Chỉ dùng pet DƯ ngoài số đang equip
+    ["Auto Gold"]        = false,     -- 10 pet thường (trừ mastery) -> 1 gold. Chạy NGAY SAU mỗi lần mở egg (cùng chuyến đi, không có timer riêng)
+    ["Auto Rainbow"]     = false,     -- 10 pet gold -> 1 rainbow
+    ["Machine Pets"]     = "event",  -- "event" = chỉ pet từ egg event | "all" = mọi pet không equip/không khoá (cẩn thận!)
+    ["Optimize"]         = false,    -- true = tắt 3D render (màn hình trắng, tiết kiệm GPU khi AFK)
+    ["FPS"]              = 60,       -- FPS cap. Vòng đào chờ theo frame -> FPS thấp = đào chậm (20 FPS ≈ 350/phút, 60 FPS ≈ 500+/phút)
+    ["Show UI"]          = true,     -- dashboard kaitun (theo mẫu ore_sweep)
+    ["UI Black Screen"]  = true,     -- true = dashboard đen full màn hình + tắt render 3D (nút góc phải để ẩn/hiện) | false = panel nhỏ góc trái
+    ["Webhook URL"]      = "",       -- Discord webhook (rỗng = tắt): báo Huge/Titanic/Gargantuan + stats mỗi giờ
+    ["Discord Tag ID"]   = "",
+    ["Debug"]            = false,    -- in từng block vỡ
+    ["Stop Key"]         = Enum.KeyCode.P,
 }
-local C = getgenv().OreSweepConfig
-for k, v in pairs(DEF) do if C[k] == nil then C[k] = v end end
-if type(C["Stop Key"]) == "string" then local ok, e = pcall(function() return Enum.KeyCode[C["Stop Key"]] end) C["Stop Key"] = ok and e or Enum.KeyCode.P end
-
--- ------------------------------------------------------------
--- services / modules
--- ------------------------------------------------------------
-local Players = game:GetService("Players")
-local RS = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
-local VirtualUser = game:GetService("VirtualUser")
-if not game:IsLoaded() then game.Loaded:Wait() end
--- BUG 22/09: AutoExec inject ngay lúc vừa vào server (sau Server Hop / teleport nội bộ) thì Players.LocalPlayer còn nil
--- -> ":91: attempt to index nil with 'Character'" và script chết luôn, hop xong không farm lại. Phải chờ LocalPlayer trước.
-local lp = Players.LocalPlayer
-if not lp then
-    local t0 = os.clock()
-    repeat task.wait(0.2) lp = Players.LocalPlayer until lp or os.clock() - t0 > 60
-    if not lp then return end
+for k, v in pairs(DEF) do if getgenv().SpaceMineConfig[k] == nil then getgenv().SpaceMineConfig[k] = v end end
+-- Stop Key cho phép ghi dạng chuỗi ("P") hoặc Enum
+if type(getgenv().SpaceMineConfig["Stop Key"]) == "string" then
+    local ok, e = pcall(function() return Enum.KeyCode[getgenv().SpaceMineConfig["Stop Key"]] end)
+    getgenv().SpaceMineConfig["Stop Key"] = ok and e or Enum.KeyCode.P
 end
-repeat task.wait(0.2) until lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-local Client = RS:WaitForChild("Library"):WaitForChild("Client")
-local BWC = require(Client.ToolCmds:WaitForChild("BlockWorldClient"))
-local Network = require(Client:WaitForChild("Network"))
-local Save = require(Client:WaitForChild("Save"))
-local InstancingCmds = require(Client:WaitForChild("InstancingCmds"))
-local ToolUtil = require(RS.Library.Util.ToolUtil)
-local PickaxeUtil = require(RS.Library.Util.PickaxeUtil)
-repeat task.wait(0.5) until Save.Get()
 
--- Chỉ 1 bản chạy: generation tăng mỗi lần chạy; bản cũ thấy generation khác thì tự dừng
--- (queue_on_teleport xếp chồng -> sau teleport mọi bản đã queue cùng chạy, check _OreSweep bị race - VERIFIED 21/09 bên main)
-getgenv()._OreSweepGen = (getgenv()._OreSweepGen or 0) + 1
-local MyGen = getgenv()._OreSweepGen
-local function Latest() return getgenv()._OreSweepGen == MyGen end
+-- ============================================================
+-- Internal config (đã tune, không cần chỉnh)
+-- ============================================================
+local _UC = getgenv().SpaceMineConfig
+local Config = {
+    InstanceName    = "SpaceMiningEvent",
+    -- đào
+    ReachStuds      = 39,     -- server Reach = 41 stud tính từ nhân vật
+    PostBreakGap    = (_UC["Speed"] == "fast") and 0.04 or 0.08, -- đệm sau khi vỡ local trước khi target block kế (Target/Break đi 2 remote)
+    MaxPending      = (_UC["Speed"] == "fast") and 8 or 6,        -- số block chờ server xác nhận song song
+    ConfirmTimeout  = 1.2,    -- giây chờ server xoá Part
+    GhostSkip       = 6,      -- giây skip block ghost rồi thử lại
+    GhostMaxFails   = 2,
+    RejectRetry     = 5,
+    DescendWhenLeft = 0,      -- xuống layer khi trong tầm còn <= N block
+    HopsPerLayer    = 6,      -- số vị trí đứng tối đa mỗi layer để vét vành
+    HopMinSpacing   = 18,
+    HardFrames      = 6,      -- block cần > N frame client -> coi là "lâu": đứng chờ server xoá (sync), không xếp hàng pending
+    QuestBonus      = 30,     -- +priority cho block quest đang thiếu (block thường = 1..8, ore = 50+)
+    -- chu kỳ (giây)
+    QuestEvery      = 8,
+    ZoneEvery       = 10,
+    UpgradeEvery    = 30,
+    BoosterEvery    = 30,
+    MerchantEvery   = 120,
+    CombineEvery    = 60,
+    StatsEvery      = 60,
+    WebhookEvery    = 3600,
+    -- block id -> priority
+    Priority = {
+        Rainbow = 100, Onyx = 98, Topaz = 96, Quartz = 94, Amethyst = 90,
+        EpicChest = 85, RareChest = 80, Emerald = 70, Ruby = 60, BasicChest = 55, Sapphire = 50,
+        Titanium = 13, Eternium = 12, Plasmanite = 11, Diorite = 10, Crimsonite = 9,
+        Elderstone = 8, Obsidian = 7, Magma = 6, Gold = 5, Sand = 4, Cobblestone = 3, Stone = 2, Dirt = 1,
+    },
+    -- khu -> tâm mặt mine (x, z) ; y mặt = 13.25
+    ZoneOrigin = {
+        [1] = Vector3.new(17163.0, 13.25, -8114.7),
+        [2] = Vector3.new(14795.3, 13.25, -8114.7),
+        [3] = Vector3.new(11113.5, 13.25, -8114.7),  -- "3 | Comet Ice"      (BlockWorld Id 5!)
+        [4] = Vector3.new(8184.3, 13.25, -8114.7),   -- "4 | Nebula Depths"  (BlockWorld Id 3, sâu hơn 20 layer)
+        [5] = Vector3.new(5290.0, 13.25, -8114.7),   -- "5 | Black Hole Core"(BlockWorld Id 4)
+        -- LƯU Ý: loc.Id (world id) KHÔNG trùng số khu -> dùng ZoneOf(loc) theo vị trí Origin
+    },
+    Quests = { "SpaceMineQuest1", "SpaceMineQuest2", "SpaceMineQuest3", "SpaceMineQuest4", "SpaceMineQuest5" },
+    Upgrades = { "SpaceMineLessOresRequired", "SpaceMineBetterVariants" },
+    UpgradeGem = "Helium-3 Gem",
+    Boosters = { "Space Mining Damage Booster", "Space Mining Speed Booster", "Space Mining Coins Booster" },
+    BoosterDuration = 600,
+    CombineRecipes = { -- rung -> input gem, số lượng gốc (Ore Savings giảm)
+        { idx = 1, input = "Moonstone Gem", n = 20, out = "Star Ruby Gem" },
+        { idx = 2, input = "Star Ruby Gem", n = 20, out = "Helium-3 Gem" },
+        { idx = 3, input = "Helium-3 Gem",  n = 20, out = "Nebulite Gem" },
+        { idx = 4, input = "Nebulite Gem",  n = 20, out = "Dark Matter Gem" },
+        { idx = 5, input = "Dark Matter Gem", n = 20, out = "Huge Moon Mining Cat" },
+    },
+    -- egg event theo khu (CustomEggs, __DIRECTORY.Eggs.Events.Mining); uid/vị trí đọc runtime từ CustomEggsCmds.All()
+    ZoneEgg = { [1] = "Moonstone Egg", [2] = "Star Ruby Egg", [3] = "Helium-3 Egg", [4] = "Nebulite Egg", [5] = "Dark Matter Egg" },
+    ZoneGateCost = { [2] = 0, [3] = 25000, [4] = 125000, [5] = 500000 }, -- Space Coins mở cổng khu N (khu 2 free)
+    -- pet event (InstanceDamageModules.SpaceMiningEvent.PET_EXTRA_DAMAGE) – đọc lại runtime, đây là fallback
+    EventPets = { "Moon Mining Cat", "Moon Mining Husky", "Moon Buggy Manatee", "Moonstone Mouse", "Bedrock Bear", "Agate Axolotl",
+        "Malachite Koi Fish", "Comet Carbuncle", "Stardust Vein Fox", "Stardust Vein Whale", "Stardust Vein Pony", "Moonrock Golem" },
+}
+
+local hardCache = {} -- id -> true nếu block cần > HardFrames frame (primitive không phá được)
+local hardFrames = {} -- id -> số frame cần
+
 -- đánh dấu script đang chạy (main_mining2 / ore_sweep không chạy chung): sau teleport chỉ script được đánh dấu chạy lại
-pcall(writefile, "space_mine_active.txt", "sweep")
-if getgenv()._SpaceMineBot then pcall(function() getgenv()._SpaceMineBot.Stop("ore_sweep start") end) task.wait(1) end
--- tự chạy lại sau teleport nội bộ của PS99 (DataModel mới -> script chết), mang theo config người dùng
+pcall(writefile, "space_mine_active.txt", "main")
+if getgenv()._OreSweep then pcall(function() getgenv()._OreSweep.Stop("main start") end) task.wait(1) end
+-- PS99 hay teleport nội bộ (migration, cùng JobId) -> DataModel mới, script chết. Xếp hàng tự chạy lại sau teleport,
+-- mang theo config của người dùng. Nguồn chạy lại: getgenv().SpaceMineLoader (chuỗi code, bản bán) -> readfile("main_mining2.lua") (dev)
 local function SerializeLua(v, depth)
     depth = depth or 0
     local t = typeof(v)
     if t == "string" then return string.format("%q", v)
     elseif t == "number" or t == "boolean" then return tostring(v)
-    elseif t == "EnumItem" then return tostring(v)
+    elseif t == "EnumItem" then return tostring(v) -- "Enum.KeyCode.P"
     elseif t == "table" and depth < 4 then
         local parts = {}
         for k, x in pairs(v) do
@@ -133,1057 +166,208 @@ end
 pcall(function()
     local q = queue_on_teleport or queueonteleport
     if not q then return end
-    local src = getgenv().OreSweepLoader -- loader riêng (bản bán, vd: 'loadstring(game:HttpGet("..."))()')
+    local src = getgenv().SpaceMineLoader
     if type(src) ~= "string" or src == "" then
-        local ok, s = pcall(readfile, "ore_sweep.lua")
+        local ok, s = pcall(readfile, "main_mining2.lua")
         if ok and s then src = "local f = loadstring(" .. string.format("%q", s) .. ") if f then task.spawn(f) end" end
     end
     if not src then return end
     q("task.spawn(function() if not game:IsLoaded() then game.Loaded:Wait() end task.wait(6) " ..
-      "local okm, m = pcall(readfile, 'space_mine_active.txt') if okm and m ~= 'sweep' then return end " ..
-      "getgenv().OreSweepConfig = " .. (SerializeLua(C) or "{}") .. " " ..
-      "getgenv().OreSweepLoader = " .. string.format("%q", getgenv().OreSweepLoader or "") .. " " ..
+      "local okm, m = pcall(readfile, 'space_mine_active.txt') if okm and m ~= 'main' then return end " ..
+      "getgenv().SpaceMineConfig = " .. (SerializeLua(getgenv().SpaceMineConfig) or "{}") .. " " ..
+      "getgenv().SpaceMineLoader = " .. string.format("%q", getgenv().SpaceMineLoader or "") .. " " ..
       src .. " end)")
 end)
 
--- tắt Auto Mine của game nếu còn bật (sót từ main_mining2 / sau teleport): nó đào block dưới chân và tele lung tung
-pcall(function()
-    local AM = require(Client:WaitForChild("AutoMineCmds"))
-    if AM.IsEnabled() then AM.Disable() print("[OreSweep] Tắt Auto Mine của game") end
-end)
--- dừng bản cũ
-if getgenv()._OreSweep then pcall(getgenv()._OreSweep.Stop) task.wait(0.8) end
+-- Chỉ 1 bản chạy: mỗi lần chạy script tăng generation; bản nào thấy generation không còn là của mình thì tự dừng.
+-- (queue_on_teleport xếp chồng: sau teleport MỌI bản đã queue cùng chạy trong 1 giây -> check _SpaceMineBot bị race, 2-3 bot đánh nhau. VERIFIED 21/09)
+getgenv()._SpaceMineGen = (getgenv()._SpaceMineGen or 0) + 1
+local MyGen = getgenv()._SpaceMineGen
+local function Latest() return getgenv()._SpaceMineGen == MyGen end
+-- dừng bản đang chạy
+if getgenv()._SpaceMineBot then
+    pcall(function() getgenv()._SpaceMineBot.Stop("restart") end)
+    task.wait(1)
+end
 if not Latest() then return end -- có bản mới hơn vừa chạy trong lúc chờ
-local S = { running = true, status = "init", stats = { ore = 0, blocks = 0, fail = 0, buried = 0, hops = 0, bombs = 0, combines = 0, merchant = 0, t0 = os.clock(), gems0 = {} } }
-getgenv()._OreSweep = S
-if typeof(STATE) == "table" and STATE.onCleanup then STATE.onCleanup(function() S.running = false end) end
 
-local function Alive() return S.running and Latest() end
-local function log(fmt, ...) print(("[OreSweep] " .. fmt):format(...)) end
-local function dbg(fmt, ...) if C["Debug"] then log(fmt, ...) end end
-local function HRP() return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") end
+-- ============================================================
+-- Services / modules
+-- ============================================================
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local VirtualUser = game:GetService("VirtualUser")
+local HttpService = game:GetService("HttpService")
+local lp = Players.LocalPlayer
 
--- ------------------------------------------------------------
--- save helpers
--- ------------------------------------------------------------
+if not game:IsLoaded() then game.Loaded:Wait() end
+repeat RunService.Heartbeat:Wait() until lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+
+local Client = RS:WaitForChild("Library"):WaitForChild("Client")
+local InstancingCmds = require(Client:WaitForChild("InstancingCmds"))
+local Save = require(Client:WaitForChild("Save"))
+local Network = require(Client:WaitForChild("Network"))
+local ToolCmds = require(Client:WaitForChild("ToolCmds"))
+local BlockWorldClient = require(Client.ToolCmds:WaitForChild("BlockWorldClient"))
+local AutoMineCmds = require(Client:WaitForChild("AutoMineCmds"))
+local ToolUtil = require(RS.Library.Util.ToolUtil)
+local PickaxeUtil = require(RS.Library.Util.PickaxeUtil)
+local Directory = RS:WaitForChild("__DIRECTORY")
+-- egg / máy gold-rainbow / pet (require trong pcall: thiếu module thì tính năng đó tự tắt)
+local CustomEggsCmds, MachineCmds, PetCmds, MasteryCmds, EggCmds
+pcall(function() CustomEggsCmds = require(Client:WaitForChild("CustomEggsCmds", 5)) end)
+pcall(function() MachineCmds = require(Client:WaitForChild("MachineCmds", 5)) end)
+pcall(function() PetCmds = require(Client:WaitForChild("PetCmds", 5)) end)
+pcall(function() MasteryCmds = require(Client:WaitForChild("MasteryCmds", 5)) end)
+pcall(function() EggCmds = require(Client:WaitForChild("EggCmds", 5)) end)
+repeat task.wait(0.5) until Save.Get()
+
+local Bot = {
+    running = true, status = "init", target = nil,
+    questNeeds = {}, gateNeeds = {}, questAnyLeft = 0, questDig = false,
+    autoMineOn = false, amEnableAt = 0, coreAt = 0, lastRangeCheck = 0, lastUI = 0, hold = nil,
+    outsideAt = 0, outsideN = 0, topAt = 0,
+}
+getgenv()._SpaceMineBot = Bot
+local function Alive() return Bot.running and Latest() end
+local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+
+-- ============================================================
+-- Log / stats
+-- ============================================================
+local Stats = {
+    start = os.clock(), broken = 0, rejected = 0, occluded = 0, byId = {}, ores = 0, bombs = 0,
+    coins0 = 0, pts0 = 0, zone = 0, layer = 0, quest = "-", lastEvent = "",
+    pets = {}, petsInit = false,
+    eggs = 0, gold = 0, rainbow = 0, pickaxe = "-",
+}
+local function Log(fmt, ...)
+    print(("[SpaceMine] " .. fmt):format(...))
+end
+local function Dbg(fmt, ...)
+    if _UC["Debug"] then Log(fmt, ...) end
+end
+local function SetStatus(s)
+    Bot.status = s
+end
+
+-- ============================================================
+-- Save helpers
+-- ============================================================
+local function SaveData() return Save.Get() end
+
 local function CountItem(id)
-    local d = Save.Get()
+    local d = SaveData()
+    if not d or not d.Inventory then return 0 end
     local n = 0
-    for _, cat in pairs(d.Inventory or {}) do
+    for _, cat in pairs(d.Inventory) do
         if type(cat) == "table" then
-            for _, it in pairs(cat) do if type(it) == "table" and it.id == id then n += (it._am or 1) end end
+            for _, it in pairs(cat) do
+                if type(it) == "table" and it.id == id then n += (it._am or 1) end
+            end
         end
     end
     return n
 end
-local function FindConsumableUID(id)
-    for uid, it in pairs(Save.Get().Inventory.Consumable or {}) do
-        if it.id == id and (it._am or 1) > 0 then return uid end
+
+local function GetSpaceCoins()
+    local d = SaveData()
+    for _, it in pairs(d.Inventory.Currency or {}) do
+        if it.id == "SpaceCoins" then return it._am or 0 end
     end
-end
-local function SpaceCoins()
-    for _, it in pairs(Save.Get().Inventory.Currency or {}) do if it.id == "SpaceCoins" then return it._am or 0 end end
     return 0
 end
-local GEMS = { "Moonstone Gem", "Star Ruby Gem", "Helium-3 Gem", "Nebulite Gem", "Dark Matter Gem" }
-for _, g in ipairs(GEMS) do S.stats.gems0[g] = CountItem(g) end
 
--- ------------------------------------------------------------
--- zone
--- ------------------------------------------------------------
-local ZoneOrigin = {
-    [1] = Vector3.new(17163.0, 13.25, -8114.7),
-    [2] = Vector3.new(14795.3, 13.25, -8114.7),
-    [3] = Vector3.new(11113.5, 13.25, -8114.7),
-    [4] = Vector3.new(8184.3, 13.25, -8114.7),
-    [5] = Vector3.new(5290.0, 13.25, -8114.7),
-}
-local function ZoneUnlocked(n)
+local function GetPoints() return SaveData().SpaceMinePoints or 0 end
+
+local function FindConsumableUID(id)
+    local d = SaveData()
+    for uid, it in pairs(d.Inventory.Consumable or {}) do
+        if it.id == id and (it._am or 1) > 0 then return uid, it._am or 1 end
+    end
+end
+
+local function InstanceVars()
+    local d = SaveData()
+    return d.InstanceVars and d.InstanceVars[Config.InstanceName] or {}
+end
+
+local function IsZoneUnlocked(n)
     if n <= 1 then return true end
-    local d = Save.Get()
-    local iv = d.InstanceVars and d.InstanceVars.SpaceMiningEvent
-    return iv and iv.InstanceZones and iv.InstanceZones["__Zone_" .. n] == true or false
-end
-local function BaseZone()
-    local want = math.clamp(tonumber(C["Target Zone"]) or 5, 1, 5)
-    while want > 1 and not ZoneUnlocked(want) do want -= 1 end
-    return want
-end
-local function WantZone()
-    if S.rotZone and ZoneUnlocked(S.rotZone) then return S.rotZone end
-    return BaseZone()
-end
-local function ZoneOf(loc)
-    if not loc or not loc.Origin then return 0 end
-    local p = loc.Origin.Position
-    local best, bd = 0, nil
-    for n, o in pairs(ZoneOrigin) do
-        local d = (Vector2.new(o.X, o.Z) - Vector2.new(p.X, p.Z)).Magnitude
-        if not bd or d < bd then best, bd = n, d end
-    end
-    return best
-end
--- khu theo vị trí nhân vật (X của ZoneOrigin gần nhất)
-local function ZoneOfPos(p)
-    local best, bd = 0, nil
-    for n, o in pairs(ZoneOrigin) do
-        local d = math.abs(o.X - p.X)
-        if not bd or d < bd then best, bd = n, d end
-    end
-    return best
-end
--- VERIFIED 22/09: tele sang khu khác đôi khi bị game đẩy về khu cũ trong <1 s (không rõ điều kiện, ~1/3 lần) -> kiểm vị trí 1.5 s, bị đẩy thì tele lại
-local function TeleZoneTop(n)
-    for attempt = 1, 3 do
-        local hrp = HRP()
-        if not hrp then return false end
-        hrp.CFrame = CFrame.new(ZoneOrigin[n] + Vector3.new(0, 5.5, 0))
-        local t0, stayed = os.clock(), true
-        while os.clock() - t0 < 1.5 do
-            task.wait(0.25)
-            hrp = HRP()
-            if not hrp or ZoneOfPos(hrp.Position) ~= n then stayed = false break end
-        end
-        if stayed then return true end
-        dbg("Tele khu %d bị đẩy về, thử lại (%d)", n, attempt)
-        task.wait(0.5)
-    end
-    return false
-end
-local function EnsureInstance()
-    if InstancingCmds.IsInInstance() then return true end
-    if not C["Auto Join"] then return false end
-    S.status = "vào event"
-    log("Vào event Space Mining")
-    pcall(InstancingCmds.Enter, "SpaceMiningEvent")
-    local t0 = os.clock()
-    repeat task.wait(0.5) until InstancingCmds.IsInInstance() or os.clock() - t0 > 25
-    return InstancingCmds.IsInInstance()
-end
-local function GetLocal()
-    local ok, loc = pcall(BWC.GetLocal)
-    if ok and loc and not loc.Destroyed then return loc end
-end
--- BUG 22/09: sau một lúc farm, bản mine của client lệch với server - còn hàng trăm block "ma" (client thấy Part, server đã xoá)
--- và thiếu block server vẫn có. Hậu quả: Exposed() thấy toàn lỗ giả -> đào cục nào cũng "ghost", ore/phút 204 -> 6, fail 41/90 s.
--- Rời + vào lại event (Leave/Enter, ~1 s, KHÔNG teleport -> không mất script) làm world nạp lại từ đầu: fail 41 -> 1. VERIFIED.
-local lastResync = 0
-local function ReSync(reason)
-    if (tonumber(C["Resync On Ghost"]) or 6) <= 0 then return false end
-    if os.clock() - lastResync < 60 then return false end
-    lastResync = os.clock()
-    log("Mine lệch (%s) -> vào lại event cho nạp lại world", tostring(reason))
-    S.status = "nạp lại mine"
-    S.hold = nil
-    if not pcall(InstancingCmds.Leave) then return false end
-    local t0 = os.clock()
-    repeat task.wait(0.3) until not InstancingCmds.IsInInstance() or os.clock() - t0 > 10
-    task.wait(1)
-    pcall(InstancingCmds.Enter, "SpaceMiningEvent")
-    t0 = os.clock()
-    repeat task.wait(0.3) until InstancingCmds.IsInInstance() or os.clock() - t0 > 25
-    task.wait(3) -- chờ block stream về
-    S.locAt = os.clock()
-    S.emptySince = nil
-    return InstancingCmds.IsInInstance()
+    local iz = InstanceVars().InstanceZones or {}
+    return iz["__Zone_" .. n] == true
 end
 
--- ------------------------------------------------------------
--- block helpers
--- ------------------------------------------------------------
-local function valid(b) return b and b.Part and b.Part.Parent ~= nil and not b.TempBroken end
-local idCache = setmetatable({}, { __mode = "k" })
-local function bid(b)
-    local c = idCache[b]
-    if c then return c end
-    local ok, d = pcall(b.GetDirectory, b)
-    c = ok and d and d._id or "?"
-    if c ~= "?" then idCache[b] = c end
-    return c
+local function HighestUnlockedZone()
+    local h = 1
+    for n = 2, 5 do if IsZoneUnlocked(n) then h = n end end
+    return h
 end
-local function center(b) local ok, cf = pcall(b.GetCFrame, b) return ok and cf.Position or (b.Part and b.Part.Position) or Vector3.zero end
-local ORE_IDS = { Sapphire = true, Ruby = true, Emerald = true, Amethyst = true, Rainbow = true, Quartz = true, Topaz = true, Onyx = true }
-local function isOreId(x) return ORE_IDS[x] == true end
-local function wantOre(x) return C["Ores"][x] == true end
--- Quặng phải có >= 1 mặt lộ (ô kề trống) thì server mới cho phá. Client load TOÀN BỘ mine (~16k block) nên
--- loc.Blocks chứa cả quặng chôn kín trong đá: cố đào -> che/timeout 2–7 s mỗi cục (VERIFIED 21/09: nb=6 fail 100 %, nb<6 vỡ 0.15–0.3 s)
-local N6 = { Vector3int16.new(1, 0, 0), Vector3int16.new(-1, 0, 0), Vector3int16.new(0, 1, 0), Vector3int16.new(0, -1, 0), Vector3int16.new(0, 0, 1), Vector3int16.new(0, 0, -1) }
-local function Exposed(loc, b)
-    local p = b.Pos
-    for _, o in ipairs(N6) do
-        if not valid(loc:GetBlock(Vector3int16.new(p.X + o.X, p.Y + o.Y, p.Z + o.Z))) then return true end
+-- khu thấp nhất mà quest pickaxe (SpaceMineQuestN) chưa Completed -> phải ở lại khu đó
+local function PickaxeZone()
+    if not _UC["Pickaxe First"] then return 5 end
+    local nq = SaveData().NPCQuests or {}
+    for n = 1, 5 do
+        local q = nq["SpaceMineQuest" .. n]
+        if not (q and q.Completed) then return n end
     end
-    return false
+    return 5
 end
 
-local secCache, secPick = {}, nil
-local function secNeeded(b, id)
-    local sel = ToolUtil.GetSelectedTool(lp, "Pickaxe")
-    local key = sel and sel:GetId() or "?"
-    if key ~= secPick then secPick = key secCache = {} end
-    local c = secCache[id]
-    if c then return c end
-    local ok, d = pcall(b.GetDirectory, b)
-    if not ok or not d then return 999 end
-    local ok2, dmg = pcall(PickaxeUtil.ComputeDamage, lp, sel, ToolUtil.GetBestTool(lp, "Pickaxe"), d)
-    c = (ok2 and dmg and dmg > 0) and ((d.Strength or 1) * 10 / dmg) or 999
-    secCache[id] = c
-    return c
+-- ============================================================
+-- Directory lookups (quest reward cost, upgrade cost)
+-- ============================================================
+local function FindDirModule(folderName, name)
+    local f = Directory:FindFirstChild(folderName)
+    if not f then return nil end
+    for _, m in ipairs(f:GetDescendants()) do
+        if m:IsA("ModuleScript") and m.Name == name then return m end
+    end
+end
+local function RequireDir(folderName, name)
+    local m = FindDirModule(folderName, name)
+    if not m then return nil end
+    local ok, r = pcall(require, m)
+    return ok and r or nil
 end
 
--- tele tới dest, chờ Hop Wait giây (theo Heartbeat) rồi kiểm tra đã tới; thử 3 lần
-local function TeleTo(dest, minWait)
-    local hrp = HRP()
-    if not hrp then return false end
-    minWait = minWait or tonumber(C["Hop Wait"]) or 0.2
-    for _ = 1, 3 do
-        hrp.CFrame = CFrame.new(dest)
-        local t0 = os.clock()
-        repeat RunService.Heartbeat:Wait() until os.clock() - t0 >= minWait
-        hrp = HRP()
-        if hrp and (hrp.Position - dest).Magnitude < 12 then S.stats.hops += 1 return true end
-        task.wait(0.25)
-        hrp = HRP()
-        if not hrp then return false end
-    end
-    return false
-end
--- tele đứng lên block thường lộ mặt trên cạnh b (cùng layer / thấp hơn 1); không có thì đứng lên chính b
-local function HopNear(loc, b)
-    local hrp = HRP()
-    if not hrp then return false end
-    local bp, dest = b.Pos, nil
-    for _, dy in ipairs({ 0, -1 }) do
-        for dx = -2, 2 do for dz = -2, 2 do
-            if dx ~= 0 or dz ~= 0 then
-                local n = loc:GetBlock(Vector3int16.new(bp.X + dx, bp.Y + dy, bp.Z + dz))
-                if valid(n) and not isOreId(bid(n)) then
-                    local above = loc:GetBlock(Vector3int16.new(n.Pos.X, n.Pos.Y + 1, n.Pos.Z))
-                    if not valid(above) then dest = center(n) break end
-                end
-            end
-        end end
-        if dest then break end
-    end
-    return TeleTo((dest or center(b)) + Vector3.new(0, 5.7, 0))
-end
-
--- GIỮ ĐỂ PHÁ (VERIFIED 21/09, port từ main_mining2): client tích damage mỗi frame vào loc.Players[lp].TargetDamage, đủ HP thì
--- client TỰ commit + server xoá. MiningFrontend mỗi 0.1 s xoá target nếu không giữ chuột -> patch BlockInteraction.GetSelectedBlock
--- + GenericInput.IsInputDown trả về block đang giữ. Commit thủ công cũ không phá được quặng lâu (pickaxe yếu).
-getgenv()._SpaceMineOrig = getgenv()._SpaceMineOrig or {}
-local holdOrig = {}
-local function HoldPatch()
-    if holdOrig.done then return true end
-    local ok, err = pcall(function()
-        local BI = require(Client.ToolCmds:WaitForChild("BlockInteraction", 5))
-        local GI = require(Client.ToolCmds.MiningFrontend:WaitForChild("GenericInput", 5))
-        pcall(setreadonly, BI, false) pcall(setreadonly, GI, false)
-        local SO = getgenv()._SpaceMineOrig
-        SO.GetSelectedBlock = SO.GetSelectedBlock or BI.GetSelectedBlock
-        SO.IsInputDown = SO.IsInputDown or GI.IsInputDown
-        holdOrig.BI, holdOrig.GI = BI, GI
-        BI.GetSelectedBlock = function(...) local h = S.hold if h then return h end return SO.GetSelectedBlock(...) end
-        GI.IsInputDown = function(...) if S.hold then return true end return SO.IsInputDown(...) end
-    end)
-    holdOrig.done = ok
-    if ok then log("Hold patch OK") else log("Hold patch LỖI: %s", tostring(err)) end
-    return ok
-end
-local function HoldUnpatch()
-    S.hold = nil
-    if not holdOrig.done or not Latest() then return end
+-- ============================================================
+-- Anti-AFK / Optimize / FPS
+-- ============================================================
+local antiAfkConn = lp.Idled:Connect(function()
     pcall(function()
-        holdOrig.BI.GetSelectedBlock = getgenv()._SpaceMineOrig.GetSelectedBlock
-        holdOrig.GI.IsInputDown = getgenv()._SpaceMineOrig.IsInputDown
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
     end)
-    holdOrig.done = false
-end
--- BUG 22/09: ngưỡng "ghost" cũ là 1.2 s cứng kể từ lần damage tăng cuối. Khi server chậm (đo thật: xoá block mất 1.47-4.27 s, ping 100 ms)
--- thì MỌI cục đều bị kết luận ghost dù thực ra đã vỡ -> fail 93/5 phút, ore/phút tụt 204 -> 33, và block bị skip 10 s oan.
--- -> chờ theo độ trễ ĐO ĐƯỢC: giữ max của 20 lần vỡ gần nhất, chờ 1.5 lần con số đó (kẹp trong [Break Wait Min, Break Wait Max]).
-local breakLat, breakLatI = {}, 0
-local function NoteBreakLat(v)
-    breakLatI = (breakLatI % 20) + 1
-    breakLat[breakLatI] = v
-end
-local function GhostWait()
-    local mx, n = 0, 0
-    for _, v in pairs(breakLat) do n += 1 if v > mx then mx = v end end
-    if n == 0 then mx = 2 end -- chưa có mẫu -> chờ ~3 s (đo thật: server chậm xoá block mất tới 4.3 s)
-    return math.clamp(mx * 1.5 + 0.3, tonumber(C["Break Wait Min"]) or 1.5, tonumber(C["Break Wait Max"]) or 6)
-end
--- phá 1 block: giữ target (hold patch) tới khi client commit (TempBroken) và server xoá Part. Bị che / ngoài tầm = damage không tăng 0.6 s
-local function Mine(loc, b, sec)
-    HoldPatch()
-    local t0 = os.clock()
-    S.hold = b
-    pcall(loc.PlayerSetTarget, loc, lp, b.Pos, true)
-    pcall(loc.LocalSetTarget, loc, b)
-    local timeout = sec * 1.3 + 2 + (tonumber(C["Break Wait Max"]) or 6)
-    local lastDmg, lastDmgAt, lastChk, tempAt = -1, t0, 0, nil
-    while os.clock() - t0 < timeout do
-        if not Alive() or not C["Enabled"] then S.hold = nil return false, "stop" end
-        RunService.Heartbeat:Wait()
-        if not b.Part or b.Part.Parent == nil then
-            S.hold = nil
-            if tempAt then NoteBreakLat(os.clock() - tempAt) end -- học độ trễ server để chỉnh ngưỡng ghost
-            return true, os.clock() - t0
-        end
-        if b.TempBroken then
-            S.hold = nil -- client đã commit, chờ server xoá
-            tempAt = tempAt or os.clock()
-            if os.clock() - tempAt > GhostWait() then return false, "ghost" end
-        else
-            local me = loc.Players and loc.Players[lp]
-            local dmg, tgt = me and me.TargetDamage or 0, me and me.Target
-            if tgt == nil or tgt ~= b.Pos then pcall(loc.LocalSetTarget, loc, b) end
-            if dmg > lastDmg + 1e-6 then lastDmg, lastDmgAt = dmg, os.clock() end
-            if os.clock() - lastDmgAt > 0.6 then S.hold = nil return false, "che" end
-        end
-        if os.clock() - lastChk > 0.5 then
-            lastChk = os.clock()
-            local h = HRP()
-            if loc.Respawning then S.hold = nil return false, "reset" end
-            if not h or (center(b) - h.Position).Magnitude > 41 then S.hold = nil return false, "xa" end
-        end
-    end
-    S.hold = nil
-    return false, "timeout"
-end
+end)
 
--- ------------------------------------------------------------
--- ore sweep
--- ------------------------------------------------------------
--- Quặng vừa stream về (sau mine reset / respawn từng block) thường tới TRƯỚC block kề -> Exposed() tưởng lộ -> đào -> server từ chối (ghost).
--- VERIFIED 22/09 -> chỉ đào quặng đã thấy >= Ore Age giây (block kề tới trong ~1 s). Mine respawn liên tục nên không thể chờ "đứng yên".
-local seenAt = setmetatable({}, { __mode = "k" })
-local skipUntil = setmetatable({}, { __mode = "k" })
-local function CollectOres(loc)
-    local fast, slow, buried = {}, {}, {}
-    local total, young, pendingAt = 0, 0, nil
-    local now = os.clock()
-    local minAge = tonumber(C["Ore Age"]) or 2
-    for _, b in pairs(loc.Blocks) do
-        if valid(b) then
-            total += 1
-            local id = bid(b)
-            if not seenAt[b] then seenAt[b] = now end
-            if wantOre(id) and now - seenAt[b] < minAge then young += 1 end -- quặng vừa respawn, chưa đủ tuổi -> đừng xoay khu, chờ nó
-            if wantOre(id) and (skipUntil[b] or 0) >= now and secNeeded(b, id) <= (C["Max Sec"] or 20) and Exposed(loc, b) then
-                -- quặng đang skip (ghost 10 s / che 60 s) vẫn là quặng của khu này -> RotateZone không được coi khu là trống (VERIFIED 22/09: đổi khu rồi quay lại đào đúng cục vừa ghost)
-                if not pendingAt or skipUntil[b] < pendingAt then pendingAt = skipUntil[b] end
-            end
-            if wantOre(id) and now - seenAt[b] >= minAge and (skipUntil[b] or 0) < now then -- đang skip thì không tính (tránh Sweep rỗng + ngủ 1 s)
-                local sec = secNeeded(b, id)
-                if sec <= (C["Max Sec"] or 20) then
-                    local e = { b = b, id = id, sec = sec }
-                    if Exposed(loc, b) then
-                        if sec > 5 then slow[#slow + 1] = e else fast[#fast + 1] = e end
-                    else
-                        buried[#buried + 1] = e
-                    end
-                end
-            end
+local function ApplyOptimize()
+    if not _UC["Optimize"] then return end
+    pcall(function() RunService:Set3dRenderingEnabled(false) end)
+    pcall(function()
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then v:Destroy() end
         end
-    end
-    return fast, slow, total, buried, young, pendingAt
-end
-
--- 1 lượt: đứng đâu phá hết quặng trong tầm 39 ở đó (gần trước); hết -> tele tới quặng gần nhất còn lại
-local function Sweep(loc, list)
-    local n = 0
-    while Alive() and C["Enabled"] do
-        if loc.Destroyed or loc.Respawning then return n, "reset" end
-        local hrp = HRP()
-        if not hrp then return n, "no-char" end
-        local now = os.clock()
-        local best, bd, farBest, fd
-        for _, e in ipairs(list) do
-            if (skipUntil[e.b] or 0) < now and valid(e.b) then
-                local d = (center(e.b) - hrp.Position).Magnitude
-                if d <= 39 then
-                    if not bd or d < bd then best, bd = e, d end
-                elseif not fd or d < fd then farBest, fd = e, d end
-            end
-        end
-        local e = best or farBest
-        if not e then return n, "done" end
-        -- mặt lộ có thể đã bị lấp (mine respawn từng block) -> kiểm lại ngay trước khi đào
-        if not Exposed(loc, e.b) then skipUntil[e.b] = now + 20 S.stats.buried += 1 continue end
-        if not best then
-            S.status = ("tele quặng %s (y=%d)"):format(e.id, e.b.Pos.Y)
-            if not HopNear(loc, e.b) then skipUntil[e.b] = now + 60 S.stats.fail += 1 continue end
-        end
-        S.status = ("đào %s (y=%d)"):format(e.id, e.b.Pos.Y)
-        local ok, info = Mine(loc, e.b, e.sec)
-        if not ok and (info == "che" or info == "timeout" or info == "xa") and not e.retried then
-            -- trong tầm nhưng bị vách che (không LOS) -> tele đứng sát quặng rồi thử lại 1 lần
-            e.retried = true
-            task.wait(0.2)
-            if HopNear(loc, e.b) then
-                S.status = ("đào sát %s (y=%d)"):format(e.id, e.b.Pos.Y)
-                ok, info = Mine(loc, e.b, e.sec)
-            end
-        end
-        if ok then
-            n += 1 S.stats.ore += 1 S.ghostRun = 0
-            dbg("#%d %s %s %.2fs (y=%d)", S.stats.ore, e.id, tostring(e.b.Pos), info, e.b.Pos.Y)
-            if S.DoBomb then S.DoBomb(loc) end -- đang đứng sát quặng = chỗ tốt để nổ (DoBomb định nghĩa phía dưới, tự gate theo Bomb Every)
-        else
-            S.stats.fail += 1
-            -- ghost = client vỡ nhưng server không xoá: hầu hết do block kề chưa stream về (ngay sau mine reset) -> server thấy quặng bị chôn.
-            -- Skip ngắn, lần sau Exposed() (đã đủ block kề) sẽ tự loại; các lỗi khác skip 60 s
-            skipUntil[e.b] = now + (info == "ghost" and 10 or 60)
-            dbg("fail %s %s: %s", e.id, tostring(e.b.Pos), tostring(info))
-            if info == "reset" or info == "stop" then return n, info end
-            -- ghost liên tiếp = world client lệch, đào nữa cũng vô ích -> nạp lại mine
-            S.ghostRun = (info == "ghost") and (S.ghostRun or 0) + 1 or 0
-            if S.ghostRun >= (tonumber(C["Resync On Ghost"]) or 6) then
-                S.ghostRun = 0
-                if ReSync(("%d ghost liên tiếp"):format(tonumber(C["Resync On Ghost"]) or 6)) then return n, "resync" end
-            end
-            task.wait(0.2)
-        end
-    end
-    return n, "stop"
-end
-
--- ------------------------------------------------------------
--- idle mine: đào block thường quanh chỗ đứng (lộ quặng mới)
--- ------------------------------------------------------------
-local function FootPos(loc)
-    local pb = loc:GetPlayerBlock(lp)
-    if not pb then -- GetPlayerBlock trả nil ~70 % frame với một số avatar (chân đúng mép block) -> tự tính từ HRP
-        local hrp = HRP()
-        if not hrp then return nil end
-        for _, dy in ipairs({ -3.5, -5 }) do -- (không viết `hrp and pcall(...)`: `and` cắt còn 1 giá trị -> p luôn nil)
-            local ok, p = pcall(loc.WorldToBlockPos, loc, hrp.Position + Vector3.new(0, dy, 0))
-            if ok and p then pb = p break end
-        end
-        if not pb then return nil end
-    end
-    for y = pb.Y, pb.Y - 3, -1 do
-        local b = loc:GetBlock(Vector3int16.new(pb.X, y, pb.Z))
-        if valid(b) then return b.Pos end
-    end
-    return pb
-end
-local function IdleMine(loc, budgetSec)
-    local t0 = os.clock()
-    local mined = 0
-    while Alive() and C["Enabled"] and os.clock() - t0 < budgetSec do
-        if loc.Destroyed or loc.Respawning then break end
-        local hrp = HRP()
-        local pb = FootPos(loc)
-        if not hrp or not pb then break end
-        local now = os.clock()
-        local best, bd
-        for _, b in pairs(loc.Blocks) do
-            if valid(b) and (skipUntil[b] or 0) < now then
-                local p = b.Pos
-                if (p.Y == pb.Y or p.Y == pb.Y + 1) and not (p.X == pb.X and p.Y == pb.Y and p.Z == pb.Z) then
-                    local id = bid(b)
-                    if not isOreId(id) and Exposed(loc, b) then
-                        local d = (center(b) - hrp.Position).Magnitude
-                        if d <= 39 and secNeeded(b, id) <= (C["Idle Max Sec"] or 3) and (not bd or d < bd) then best, bd = b, d end
-                    end
-                end
-            end
-        end
-        if best then
-            S.status = ("đào lấp %s (y=%d)"):format(bid(best), pb.Y)
-            local ok = Mine(loc, best, secNeeded(best, bid(best)))
-            if ok then mined += 1 S.stats.blocks += 1 else skipUntil[best] = now + 10 end
-            -- có quặng mới lộ ra thì quay lại sweep
-            if mined % 10 == 0 then
-                local fast = CollectOres(loc)
-                if #fast >= (C["Min Ores"] or 3) then break end
-            end
-        else
-            -- hết block trong tầm -> xuống block lộ thiên gần nhất ở layer dưới
-            local below, bdist
-            for dy = 1, 3 do
-                for _, b in pairs(loc.Blocks) do
-                    if valid(b) and b.Pos.Y == pb.Y - dy and not isOreId(bid(b)) then
-                        local above = loc:GetBlock(Vector3int16.new(b.Pos.X, b.Pos.Y + 1, b.Pos.Z))
-                        if not valid(above) then
-                            local d = (center(b) - hrp.Position).Magnitude
-                            if not bdist or d < bdist then below, bdist = b, d end
-                        end
-                    end
-                end
-                if below then break end
-            end
-            if below then
-                hrp.CFrame = CFrame.new(center(below) + Vector3.new(0, 5.7, 0)) task.wait(0.4)
-            else
-                break
-            end
-        end
-    end
-    return mined
-end
-
--- ------------------------------------------------------------
--- đào tới quặng chôn bằng BFS (22/09): từ quặng lan ra 6 hướng qua block hợp lệ tới ô TRỐNG gần nhất (giếng xuống, hầm ngang
--- từ giếng cũ, hay chỉ 1 block) -> đường = ít block phải phá nhất. Đứng ở block chân cạnh ô trống đầu đường, đào từ ngoài
--- vào (mỗi block vỡ lộ block kế, tầm 41 stud ~ 7 block). Ưu tiên quặng có đường ngắn + gần chỗ đứng -> tự vét theo cụm.
--- ------------------------------------------------------------
-local digSkip = setmetatable({}, { __mode = "k" })
-local DIRS = { Vector3int16.new(1, 0, 0), Vector3int16.new(-1, 0, 0), Vector3int16.new(0, 1, 0), Vector3int16.new(0, -1, 0), Vector3int16.new(0, 0, 1), Vector3int16.new(0, 0, -1) }
-local function InRegion(loc, p)
-    local r = loc.Region
-    if not r then return true end
-    return p.X >= r.Min.X and p.X <= r.Max.X and p.Y >= r.Min.Y and p.Y <= r.Max.Y and p.Z >= r.Min.Z and p.Z <= r.Max.Z
-end
--- trả về: đường (danh sách block từ NGOÀI vào, không gồm quặng), ô trống đầu đường (Vector3int16)
--- cận trên: số block cột thẳng lên tới ô trống (đường chắc chắn tồn tại) -> BFS không cần duyệt sâu hơn
-local function ColumnDepth(loc, ore, maxDepth)
-    local d = 0
-    for y = ore.Pos.Y + 1, ore.Pos.Y + maxDepth do
-        local b = loc:GetBlock(Vector3int16.new(ore.Pos.X, y, ore.Pos.Z))
-        if not valid(b) then return d end
-        if (isOreId(bid(b)) and not wantOre(bid(b))) or secNeeded(b, bid(b)) > (tonumber(C["Dig Max Sec"]) or 8) then return nil end
-        d += 1
-    end
-    return nil
-end
-local BFS_MAX_NODES = 5000 -- treo VM nếu không chặn (VERIFIED 22/09: mine đầy, quặng sâu -> hàng trăm nghìn GetBlock)
-local function PathToAir(loc, ore, maxDepth)
-    local colD = ColumnDepth(loc, ore, maxDepth)
-    if colD then maxDepth = math.min(maxDepth, colD) end
-    local key = function(p) return p.X .. "," .. p.Y .. "," .. p.Z end
-    local start = ore.Pos
-    local prev, seen = {}, { [key(start)] = true }
-    local queue, qi = { start }, 1
-    local depthOf = { [key(start)] = 0 }
-    local nodes = 0
-    while qi <= #queue do
-        local p = queue[qi] qi += 1
-        local d = depthOf[key(p)]
-        nodes += 1
-        if nodes > BFS_MAX_NODES then break end
-        if nodes % 800 == 0 then task.wait() end
-        if d >= maxDepth then continue end
-        for _, o in ipairs(DIRS) do
-            local q = Vector3int16.new(p.X + o.X, p.Y + o.Y, p.Z + o.Z)
-            local k = key(q)
-            if not seen[k] and InRegion(loc, q) then
-                seen[k] = true
-                local b = loc:GetBlock(q)
-                if not valid(b) then
-                    -- ô trống: dựng đường ngược về quặng
-                    local path, cur = {}, p
-                    while cur and key(cur) ~= key(start) do
-                        path[#path + 1] = loc:GetBlock(cur)
-                        cur = prev[key(cur)]
-                    end
-                    return path, q, d -- path[1] = block sát ô trống, path[#path] = block sát quặng
-                elseif not (isOreId(bid(b)) and not wantOre(bid(b))) and secNeeded(b, bid(b)) <= (tonumber(C["Dig Max Sec"]) or 8) then
-                    prev[k] = p
-                    depthOf[k] = d + 1
-                    queue[#queue + 1] = q
-                end
-            end
-        end
-    end
-    if colD then -- BFS bị chặn -> dùng đường cột thẳng lên
-        local path = {}
-        for y = ore.Pos.Y + colD, ore.Pos.Y + 1, -1 do path[#path + 1] = loc:GetBlock(Vector3int16.new(ore.Pos.X, y, ore.Pos.Z)) end
-        return path, Vector3int16.new(ore.Pos.X, ore.Pos.Y + colD + 1, ore.Pos.Z), colD
-    end
-    return nil
-end
--- block chân gần ô trống 'air' nhất để đứng đào (block lộ mặt trên, cách air <= 6 block)
-local function StandNear(loc, air)
-    local best, bd
-    for dx = -3, 3 do for dz = -3, 3 do for dy = -1, 3 do
-        local p = Vector3int16.new(air.X + dx, air.Y - dy, air.Z + dz)
-        local b = loc:GetBlock(p)
-        if valid(b) and not isOreId(bid(b)) and not valid(loc:GetBlock(Vector3int16.new(p.X, p.Y + 1, p.Z))) then
-            local d = math.abs(dx) + math.abs(dz) + dy * 0.5
-            if not bd or d < bd then best, bd = b, d end
-        end
-    end end end
-    return best
-end
-local buriedCache = { at = 0, loc = nil, list = {} }
-local function BuriedOres(loc)
-    if buriedCache.loc == loc and os.clock() - buriedCache.at < 4 then return buriedCache.list end
-    local list = {}
-    local now = os.clock()
-    local maxDepth = tonumber(C["Dig Max Depth"]) or 30
-    local hrp = HRP()
-    local n = 0
-    for _, b in pairs(loc.Blocks) do
-        if valid(b) and (digSkip[b] or 0) < now then
-            local id = bid(b)
-            if wantOre(id) and not Exposed(loc, b) and secNeeded(b, id) <= (C["Max Sec"] or 20) then
-                local path, air, depth = PathToAir(loc, b, maxDepth)
-                if path then
-                    local d = hrp and (center(b) - hrp.Position).Magnitude or 0
-                    list[#list + 1] = { b = b, id = id, path = path, air = air, depth = depth, score = depth * 10 + d / 20 }
-                end
-                n += 1
-                if n % 40 == 0 then task.wait() end -- BFS ~ms/quặng, nhường frame
-            end
-        end
-    end
-    table.sort(list, function(a, c) return a.score < c.score end)
-    buriedCache.at, buriedCache.loc, buriedCache.list = os.clock(), loc, list
-    return list
-end
-local function DigBuried(loc)
-    if not C["Dig Buried"] then return false end
-    local list = BuriedOres(loc)
-    local e = list[1]
-    if not e then return false end
-    S.status = ("đào tới %s (%d block)"):format(e.id, e.depth)
-    local stand = StandNear(loc, e.air)
-    local hrp = HRP()
-    if not hrp then return false end
-    if stand then TeleTo(center(stand) + Vector3.new(0, 5.7, 0)) end
-    local mined = 0
-    for i = 1, #e.path do
-        local b = e.path[i]
-        if not Alive() or not C["Enabled"] or loc.Destroyed or loc.Respawning then return false end
-        if not valid(e.b) then return true end
-        if valid(b) then
-            hrp = HRP()
-            -- block kế ngoài tầm 41 (hầm dài / đã rơi xuống giếng) -> đứng lại gần block vừa phá
-            if hrp and (center(b) - hrp.Position).Magnitude > 38 then
-                local prevB = e.path[i - 1]
-                local sp = prevB and StandNear(loc, prevB.Pos)
-                if sp then TeleTo(center(sp) + Vector3.new(0, 5.7, 0)) end
-            end
-            local ok, info = Mine(loc, b, secNeeded(b, bid(b)))
-            if not ok then
-                dbg("Đào tới %s thất bại ở block %d/%d (%s): %s", e.id, i, #e.path, bid(b), tostring(info))
-                digSkip[e.b] = os.clock() + 60
-                S.stats.fail += 1
-                return false
-            end
-            mined += 1 S.stats.blocks += 1
-            task.wait(0.05)
-        end
-        if Exposed(loc, e.b) then break end
-    end
-    dbg("Lộ %s sau %d block", e.id, mined)
-    buriedCache.at = 0
-    return true
-end
-
--- ------------------------------------------------------------
--- xoay khu: xem RotateZone (tuần tự 5 -> 4 -> 3 -> 2 -> 1 -> về 5). Config "Zone Rotate" = false thì chỉ ở Target Zone.
--- ------------------------------------------------------------
--- server hop: mine là per-server; hết quặng toàn bộ thì sang server khác. Ưu tiên server ít người (games API), fallback Teleport thường
--- Nhớ server đã vào (file, sống qua teleport) -> không nhảy trùng. Mỗi dòng: "<jobId> <os.time()>"
-local HOP_FILE = "space_mine_servers.txt"
-local function LoadVisited()
-    local keep = tonumber(C["Hop Memory"]) or 7200
-    local seen, now = {}, os.time()
-    if keep <= 0 then return seen end
-    local ok, txt = pcall(readfile, HOP_FILE)
-    if ok and txt then
-        for id, t in txt:gmatch("(%S+)%s+(%d+)") do
-            if now - tonumber(t) < keep then seen[id] = tonumber(t) end
-        end
-    end
-    return seen
-end
-local function SaveVisited(seen)
-    if (tonumber(C["Hop Memory"]) or 7200) <= 0 then return end
-    local parts = {}
-    for id, t in pairs(seen) do parts[#parts + 1] = id .. " " .. t end
-    pcall(writefile, HOP_FILE, table.concat(parts, "\n"))
-end
-local HOPLIST_FILE = "space_mine_hoplist.txt" -- server chưa dùng tới của lần fetch trước (API 429 rất dễ dính -> đừng gọi lại)
-local function LoadHopList(seen)
-    local out = {}
-    local ok, txt = pcall(readfile, HOPLIST_FILE)
-    if ok and txt then
-        for id, n, t in txt:gmatch("(%S+)%s+(%d+)%s+(%d+)") do
-            if os.time() - tonumber(t) < 1800 and not seen[id] then out[#out + 1] = { id = id, n = tonumber(n) } end
-        end
-    end
-    return out
-end
-local function SaveHopList(list)
-    local parts, now = {}, os.time()
-    for i = 1, math.min(#list, 60) do parts[#parts + 1] = ("%s %d %d"):format(list[i].id, list[i].n, now) end
-    pcall(writefile, HOPLIST_FILE, table.concat(parts, "\n"))
-end
--- đánh dấu server đang chơi ngay khi script chạy -> lần hop sau không quay lại đây
-do
-    local seen = LoadVisited()
-    if seen[game.JobId] then
-        S.dupServer = true -- hop vừa rồi rơi trúng server đã farm -> được phép hop lại ngay, không chờ Hop After
-        log("Server này ĐÃ vào trước đó -> sẽ hop lại sớm")
-    end
-    seen[game.JobId] = os.time()
-    SaveVisited(seen)
-end
-local emptyRounds, lastHopTry = 0, 0
-local function ServerHop(reason)
-    if not C["Server Hop"] then return false end
-    local after = (S.dupServer or S.deadMine) and 20 or (tonumber(C["Hop After"]) or 120) -- vào trúng server cũ / mine đã bị vét -> khỏi chờ 2 phút
-    if os.clock() - S.stats.t0 < after or os.clock() - lastHopTry < 30 then return false end
-    lastHopTry = os.clock()
-    local TS = game:GetService("TeleportService")
-    local HS = game:GetService("HttpService")
-    log("Server hop (%s) ...", tostring(reason))
-    S.status = "server hop"
-    pcall(writefile, "space_mine_active.txt", "sweep")
-    local seen = LoadVisited()
-    seen[game.JobId] = os.time()
-    -- gom nhiều trang, bỏ server đã vào; sortOrder ngẫu nhiên + cursor -> mỗi lần hop thấy bộ server khác
-    -- (bản cũ: luôn trang đầu sortOrder=Asc, không nhớ gì -> nhảy trúng lại server vừa rời. VERIFIED 22/09)
-    local cands = LoadHopList(seen) -- dùng server dư của lần fetch trước (khỏi gọi API -> khỏi 429)
-    -- games.roblox.com khoá theo IP khá lâu khi đã 429 -> nhớ mốc, trong 5 phút sau đó khỏi gọi (đỡ phí 12 s backoff mỗi lần hop)
-    local cooling = false
-    do
-        local okc, t = pcall(readfile, "space_mine_hop429.txt")
-        cooling = okc and tonumber(t) and os.time() - tonumber(t) < 300 or false
-    end
-    if cooling and #cands == 0 then log("Server list đang bị rate-limit -> teleport ngẫu nhiên, vào trùng thì hop tiếp") end
-    if C["Hop Prefer Empty"] ~= false and #cands < 5 and not cooling then
-        local http = (syn and syn.request) or http_request or request -- có status code -> phân biệt 429 với lỗi thật
-        local function get(url)
-            if http then
-                local ok, res = pcall(http, { Url = url, Method = "GET" })
-                if ok and res then return res.StatusCode or 0, res.Body end
-                return 0, nil
-            end
-            local ok, body = pcall(game.HttpGet, game, url)
-            return ok and 200 or 0, ok and body or nil
-        end
-        local cursor, pages = nil, math.max(1, tonumber(C["Hop Pages"]) or 4)
-        local order = (math.random() < 0.5) and "Asc" or "Desc"
-        for _ = 1, pages do
-            local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=%s&excludeFullGames=true&limit=100"):format(game.PlaceId, order)
-            if cursor then url = url .. "&cursor=" .. cursor end
-            local code, body
-            for try = 1, 2 do -- 429 = rate limit, chờ rồi thử lại (VERIFIED 22/09: vài lần gọi liên tiếp là dính, khoá vài phút)
-                code, body = get(url)
-                if code ~= 429 then break end
-                log("Server list 429, chờ %ds", try * 4)
-                task.wait(try * 4)
-            end
-            if code == 429 then pcall(writefile, "space_mine_hop429.txt", tostring(os.time())) end
-            if code ~= 200 or not body then log("Server list lỗi (HTTP %s)", tostring(code)) break end
-            local okj, data = pcall(HS.JSONDecode, HS, body)
-            if not okj or not data then break end
-            for _, sv in ipairs(data.data or {}) do
-                local n = sv.playing or 0
-                if sv.id and sv.id ~= game.JobId and not seen[sv.id] and n < (sv.maxPlayers or 12) then
-                    cands[#cands + 1] = { id = sv.id, n = n }
-                end
-            end
-            cursor = data.nextPageCursor
-            if not cursor then break end
-            task.wait(0.6) -- nhịp nhẹ giữa các trang cho đỡ 429
-        end
-    end
-    table.sort(cands, function(a, b) return a.n < b.n end)
-    local ok, err
-    local total = #cands
-    -- thử vài server (server có thể đầy/đóng giữa chừng); random trong 5 server vắng nhất để nhiều acc không dồn 1 chỗ
-    for _ = 1, math.min(3, total) do
-        local pick = table.remove(cands, math.random(1, math.min(5, #cands)))
-        if not pick then break end
-        log("Hop -> server %s (%d nguoi, %d server chua vao)", pick.id, pick.n, total)
-        seen[pick.id] = os.time() SaveVisited(seen)
-        SaveHopList(cands) -- server còn lại để dành cho lần hop sau
-        ok, err = pcall(TS.TeleportToPlaceInstance, TS, game.PlaceId, pick.id, lp)
-        if ok then break end
-        task.wait(1)
-    end
-    if not ok then
-        log("Hop -> server ngau nhien (%s)", tostring(err or (total == 0 and "khong con server chua vao" or "no target")))
-        ok, err = pcall(TS.Teleport, TS, game.PlaceId, lp)
-    end
-    if ok then task.wait(15) end -- chờ teleport; nếu không đi được thì vòng sau thử lại
-    return ok
-end
-
--- KIỂM TRA MINE SAU KHI VÀO SERVER (VERIFIED 22/09: mine đầy = 16.721 block, server bị vét = 521-1.500 block; quặng sinh dần chứ không có sẵn lúc reset)
--- -> đếm block thay vì đếm quặng: mine ít block = server cũ, hop tiếp NGAY. Mine còn đầy mà 0 quặng = chỉ đang chờ respawn -> chờ Hop After Empty giây.
--- Dùng khi Zone Rotate = false (không quét 4/3/2/1); ServerHop tự lo blacklist server + chọn ngẫu nhiên.
-local function HopIfDead(loc, total)
-    if not C["Server Hop"] then return false end
-    if S.locAt and os.clock() - S.locAt < 8 then return false end -- mine chưa stream xong, chưa kết luận
-    S.emptySince = S.emptySince or os.clock()
-    if total < (tonumber(C["Hop If Mine Dead"]) or 8000) then
-        S.deadMine = true
-        return ServerHop(("mine cạn: còn %d block"):format(total))
-    end
-    local waited = os.clock() - S.emptySince
-    if waited >= (tonumber(C["Hop After Empty"]) or 60) then
-        return ServerHop(("%.0f s không có quặng (mine %d block)"):format(waited, total))
-    end
-    return false
-end
-
--- Xoay khu TUẦN TỰ (yêu cầu 22/09): farm sạch khu gốc (5) -> sang 4 farm sạch -> 3 -> 2 -> 1 -> về khu gốc (mine đã respawn) và lặp lại.
--- "Sạch" = vòng chính không còn quặng lộ / chậm / chôn đào được / quặng non (mới tới RotateZone). Mine reset (loc.Respawning) ở khu nào cũng về khu gốc.
--- Một vòng 5->1 mà không được quặng nào -> nghỉ Idle Wait ở khu gốc rồi mới đi tiếp (emptyRounds >= 2 -> Server Hop nếu bật).
-local cycleOre0 = nil
-local zoneArriveOre, zoneEmptyAt = {}, {} -- ore lúc tới khu / lần cuối rời khu mà 0 quặng
-local function RotateZone(loc)
-    if not C["Zone Rotate"] then return false end
-    -- VERIFIED 22/09: ngay sau tele, loc mới có nhưng Blocks chưa stream -> fast/young đều 0 -> tưởng khu trống, nhảy tiếp sau 1 s. Chờ Ore Age + 1.5 s
-    local settle = (tonumber(C["Ore Age"]) or 2) + 1.5
-    if S.locAt and os.clock() - S.locAt < settle then S.status = "chờ khu load" task.wait(0.5) return true end
-    local cur, base = ZoneOf(loc), BaseZone()
-    -- server cạn: khu 4-1 chỉ còn 0-5 quặng/lượt -> bật Server Hop thì khu gốc sạch là hop luôn, khỏi quét xuống
-    if C["Server Hop"] and C["Hop Instead Of Rotate"] ~= false and cur == base then
-        if ServerHop("khu " .. base .. " hết quặng") then emptyRounds = 0 return true end
-        S.status = "chờ hop"
-        task.wait(C["Idle Wait"] or 5)
-        return true
-    end
-    if zoneArriveOre[cur] and S.stats.ore - zoneArriveOre[cur] == 0 then zoneEmptyAt[cur] = os.clock() end
-    local skip = tonumber(C["Rotate Skip Empty"]) or 0
-    local nxt = cur - 1
-    while nxt >= 1 and (not ZoneUnlocked(nxt) or os.clock() - (zoneEmptyAt[nxt] or -1e9) < skip) do nxt -= 1 end
-    if cur == base then cycleOre0 = S.stats.ore end -- bắt đầu vòng mới từ khu gốc
-    if nxt < 1 then
-        -- hết khu 1 -> về khu gốc
-        if cycleOre0 and S.stats.ore - cycleOre0 == 0 then
-            emptyRounds += 1
-            if emptyRounds >= 2 and ServerHop(("%d vòng 5 khu không có quặng"):format(emptyRounds)) then emptyRounds = 0 return true end
-            S.status = "5 khu trống, nghỉ " .. tostring(C["Idle Wait"] or 5) .. " s"
-            task.wait(C["Idle Wait"] or 5)
-        else
-            emptyRounds = 0
-        end
-        nxt = base
-    end
-    if nxt == cur then return false end
-    local f, sl, _, bu, yo, pe = CollectOres(loc)
-    log("Khu %d hết quặng (lộ %d chậm %d chôn %d non %d skip %s) -> sang khu %d", cur, #f, #sl, #bu, yo, pe and ("%.0fs"):format(pe - os.clock()) or "-", nxt)
-    S.status = "sang khu " .. nxt
-    S.rotZone = (nxt ~= base) and nxt or nil
-    zoneArriveOre[nxt] = S.stats.ore
-    TeleZoneTop(nxt)
-    return true
-end
-
--- ------------------------------------------------------------
--- auto combine: bấm UI _MACHINES.PetCraftingMachine (craft TỪ XA được, server không check khoảng cách) -> chọn recipe,
--- đọc "have/need" từ ObjectiveFrame, bấm OkMax/OkOne. Nút recipe "1".."4","10" chỉ có sau khi game render UI cho máy
--- Combine-O-Matic (đứng lên Pad máy khu 5 1 lần; máy khác có thể đè) -> thiếu nút thì tele lên Pad rồi tele về.
--- (PetCraftingMachine_Craft gọi thẳng bị server assert -> đi qua UI)
--- Kết quả đếm bằng số INPUT bị trừ (rung 10 trả pet ngẫu nhiên, không có item tên "Combine Egg" trong túi).
--- Recipe gốc: ReplicatedStorage.__DIRECTORY.PetCraftingMachines["PetCraftingMachine | MiningCraftMachine"] (rung 5-9 tắt FFlag 22/09).
--- ------------------------------------------------------------
-local Recipes = {
-    { idx = 1,  input = "Moonstone Gem",   out = "Star Ruby Gem" },
-    { idx = 2,  input = "Star Ruby Gem",   out = "Helium-3 Gem" },
-    { idx = 3,  input = "Helium-3 Gem",    out = "Nebulite Gem" },
-    { idx = 4,  input = "Nebulite Gem",    out = "Dark Matter Gem" },
-    { idx = 10, input = "Dark Matter Gem", out = "Combine Egg" },
-}
-local LAST_BTN = tostring(Recipes[#Recipes].idx) -- nút cuối có mặt = UI máy đã render đúng (Content của máy khác chỉ có "Button")
-local function PressButton(btn)
-    local ok, conns = pcall(getconnections, btn.Activated)
-    if ok and #conns > 0 then
-        for _, c in ipairs(conns) do if c.Function then task.spawn(c.Function) end end
-        return true
-    end
-    if firesignal then pcall(firesignal, btn.Activated) return true end
-    return false
-end
-local function MachinePad()
-    local ok, pad = pcall(function()
-        return workspace.__THINGS.__INSTANCE_CONTAINER.Active.SpaceMiningEvent.INTERACT.Machines.MiningCraftMachine.Pad
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
     end)
-    return ok and pad or nil
+    Log("Optimize: 3D rendering off")
 end
--- đọc "have/need <item>" trong ObjectiveFrame sau khi chọn recipe
-local function ReadNeed(frame, input)
-    for _, d in ipairs(frame.ObjectiveFrame:GetDescendants()) do
-        if d:IsA("TextLabel") then
-            local have, need = d.Text:match("^(%d+)/(%d+)%s+" .. input:gsub("%-", "%%-") .. "$")
-            if have then return tonumber(have), tonumber(need) end
-        end
-    end
-end
-local lastCombine = 0
-local function DoCombine()
-    if not C["Auto Combine"] or os.clock() - lastCombine < (tonumber(C["Combine Every"]) or 300) then return end
-    lastCombine = os.clock()
-    local want = C["Combine"] or {}
-    local keep = tonumber(C["Combine Keep"]) or 0
-    -- có gì để combine không (ước lượng: cần ít nhất 2 input) -> khỏi tele vô ích
-    local any = false
-    for _, r in ipairs(Recipes) do if want[r.out] and CountItem(r.input) - keep >= 2 then any = true break end end
-    if not any then return end
-    local frame = lp.PlayerGui:FindFirstChild("_MACHINES")
-    frame = frame and frame:FindFirstChild("PetCraftingMachine") and frame.PetCraftingMachine:FindFirstChild("Frame")
-    if not frame then return end
-    local content = frame:FindFirstChild("UsingFrame") and frame.UsingFrame:FindFirstChild("Content")
-    local back
-    if not (content and content:FindFirstChild(LAST_BTN)) then
-        -- UI máy chưa render -> lên Pad 1 lần cho game render nút recipe
-        local pad, hrp = MachinePad(), HRP()
-        if not pad or not hrp then return end
-        back = hrp.CFrame
-        S.status = "lên máy combine"
-        hrp.CFrame = CFrame.new(pad.Position + Vector3.new(0, 3.8, 0))
-        local t0 = os.clock()
-        repeat
-            task.wait(0.25)
-            content = frame:FindFirstChild("UsingFrame") and frame.UsingFrame:FindFirstChild("Content")
-        until (content and content:FindFirstChild(LAST_BTN)) or os.clock() - t0 > 8
-    end
-    local submit = frame:FindFirstChild("ObjectiveFrame") and frame.ObjectiveFrame:FindFirstChild("SubmitHolder")
-    local okOne, okMax = submit and submit:FindFirstChild("OkOne"), submit and submit:FindFirstChild("OkMax")
-    local crafted = {}
-    if content and content:FindFirstChild(LAST_BTN) and okOne then
-        for i = #Recipes, 1, -1 do -- rung cao trước (dùng gem vừa combine ở rung dưới lần sau)
-            local r = Recipes[i]
-            local btn = want[r.out] and content:FindFirstChild(tostring(r.idx))
-            if btn and CountItem(r.input) - keep >= 2 then
-                PressButton(btn) task.wait(0.5)
-                local have, need = ReadNeed(frame, r.input)
-                if have and need and need > 0 then
-                    local times = math.floor((have - keep) / need)
-                    if times >= 1 then
-                        S.status = ("combine %s x%d"):format(r.out, times)
-                        local in0 = CountItem(r.input)
-                        if keep == 0 and okMax then
-                            -- OkMax craft tối đa 100/lần -> lặp tới khi hết input (tối đa 10 lần)
-                            for _ = 1, 10 do
-                                local before = CountItem(r.input)
-                                PressButton(okMax) task.wait(2)
-                                local left = CountItem(r.input)
-                                if left >= before or left < need then break end
-                            end
-                        else
-                            for _ = 1, math.min(times, 25) do PressButton(okOne) task.wait(1.2) end
-                        end
-                        local got = math.floor((in0 - CountItem(r.input)) / need) -- rung 10 ra pet, không đếm được output
-                        if got > 0 then crafted[r.out] = got S.stats.combines += got end
-                    end
-                end
-            end
-        end
-    else
-        log("Combine: UI máy không render nút recipe")
-    end
-    if back then
-        local hrp = HRP()
-        if hrp then hrp.CFrame = back end
-        task.wait(0.5)
-    end
-    local parts = {}
-    for k, v in pairs(crafted) do parts[#parts + 1] = k .. " x" .. v end
-    if #parts > 0 then log("Combine: %s", table.concat(parts, ", ")) end
-    return crafted
-end
-S.DoCombine = function() lastCombine = 0 return DoCombine() end -- gọi tay: getgenv()._OreSweep.DoCombine()
+pcall(function()
+    local fps = tonumber(_UC["FPS"]) or 30
+    if setfpscap then setfpscap(fps) elseif syn and syn.setfpscap then syn.setfpscap(fps) end
+end)
 
--- ------------------------------------------------------------
--- bombs
--- ------------------------------------------------------------
--- Consumables_Consume(uid, 1) nổ tại vị trí nhân vật (server đọc Player.Optional.Position), phải đang trong mine + FFlag SpaceMineExplosives.
--- res == false = debounce (~1 s) / hết hàng -> thử lại vòng sau, không tính. Xoay vòng loại để dùng hết mọi stock (bản cũ chỉ ném loại đầu list).
-local lastBomb, bombIdx = 0, 0
-local function DoBomb(loc)
-    if not C["Auto Bomb"] or os.clock() - lastBomb < (tonumber(C["Bomb Every"]) or 5) then return end
-    if not loc or loc.Destroyed or loc.Respawning then return end
-    local list = C["Bomb Use"] or {}
-    if #list == 0 then return end
-    for _ = 1, #list do
-        bombIdx = bombIdx % #list + 1
-        local id = list[bombIdx]
-        local uid = FindConsumableUID(id)
-        if uid then
-            local ok, res = pcall(Network.Invoke, "Consumables_Consume", uid, 1)
-            if ok and res == true then
-                lastBomb = os.clock()
-                S.stats.bombs += 1
-                dbg("Bom %s (còn %d)", id, CountItem(id))
-                return
-            end
-            lastBomb = os.clock() - (tonumber(C["Bomb Every"]) or 5) + 1.5 -- bị debounce -> thử lại sau 1.5 s
-            return
-        end
-    end
-    lastBomb = os.clock() + 55 -- không còn quả nào -> 1 phút sau mới quét lại túi (merchant refresh)
-end
-S.DoBomb = DoBomb
-
--- ------------------------------------------------------------
--- merchant (copy từ main_mining2: Merchant_GetOffers luôn nil, cứ RequestPurchase từng slot, server tự validate)
--- ------------------------------------------------------------
-local lastMerchant, merchantSeed, merchantDone = 0, nil, {}
-local function DoMerchant()
-    if not C["Auto Merchant"] or os.clock() - lastMerchant < (tonumber(C["Merchant Every"]) or 120) then return end
-    lastMerchant = os.clock()
-    local reserve = tonumber(C["Merchant Reserve"]) or 0
-    if SpaceCoins() <= reserve then return end
-    -- MerchantPurchases.SpaceMineMerchant: Seed đổi = merchant refresh (600 s) -> thử lại mọi slot
-    local d = Save.Get()
-    local mp = d.MerchantPurchases and d.MerchantPurchases.SpaceMineMerchant or {}
-    if mp.Seed ~= merchantSeed then merchantSeed = mp.Seed merchantDone = {} end
-    local bought = {}
-    for slot = 1, tonumber(C["Merchant Slots"]) or 6 do
-        if not merchantDone[slot] then
-            local n = 0
-            for _ = 1, 3 do -- stock tối đa 3
-                local ok, res = pcall(Network.Invoke, "Merchant_RequestPurchase", "SpaceMineMerchant", slot)
-                if ok and res == true then n += 1 task.wait(0.4) else break end
-                if SpaceCoins() <= reserve then break end
-            end
-            merchantDone[slot] = true -- hết hàng / khoá / đã mua -> chờ refresh (Seed đổi)
-            if n > 0 then bought[#bought + 1] = ("slot%d x%d"):format(slot, n) S.stats.merchant += n end
-        end
-    end
-    if #bought > 0 then log("Merchant mua: %s (coins còn %d)", table.concat(bought, ", "), SpaceCoins()) end
-end
-
--- ------------------------------------------------------------
--- Free Rewards (port từ main_mining2, VERIFIED 22/09): Save.FreeGiftsTime = giây đã chơi, Save.FreeGiftsRedeemed = {id...};
--- __DIRECTORY.FreeGifts "FreeGift | N".WaitTime (1:0 2:600 3:900 4:1200 5:1800 6:2400 7:3000 8:3600 9:4500 10:5400 11:7200 12:10800)
--- -> quà N sẵn sàng khi FreeGiftsTime >= WaitTime và chưa redeem; Network.Invoke("Redeem Free Gift", N) -> true
--- ------------------------------------------------------------
-local giftWait, lastGiftAt = nil, 0
-local function DoFreeGifts()
-    if not C["Auto Free Gifts"] or os.clock() - lastGiftAt < 60 then return end
-    lastGiftAt = os.clock()
-    if not giftWait then
-        giftWait = {}
-        pcall(function()
-            for _, m in ipairs(RS.__DIRECTORY.FreeGifts:GetChildren()) do
-                local ok, g = pcall(require, m)
-                if ok and type(g) == "table" and tonumber(g.Id) then giftWait[tonumber(g.Id)] = tonumber(g.WaitTime) or 0 end
-            end
-        end)
-    end
-    local d = Save.Get()
-    local played = tonumber(d.FreeGiftsTime) or 0
-    local done = {}
-    for _, id in ipairs(d.FreeGiftsRedeemed or {}) do done[tonumber(id)] = true end
-    local got = {}
-    for id = 1, 12 do
-        local wait = giftWait[id]
-        if wait and not done[id] and played >= wait then
-            local ok, res = pcall(Network.Invoke, "Redeem Free Gift", id)
-            if ok and res == true then got[#got + 1] = tostring(id) end
-            task.wait(0.3)
-        end
-    end
-    if #got > 0 then log("Free Rewards: claim quà #%s", table.concat(got, ",")) end
-end
-S.DoFreeGifts = function() lastGiftAt = 0 return DoFreeGifts() end -- gọi tay: getgenv()._OreSweep.DoFreeGifts()
-
--- ------------------------------------------------------------
--- UI dashboard / webhook / anti-afk / stop key
--- ------------------------------------------------------------
-local HttpService = game:GetService("HttpService")
+-- ============================================================
+-- Dashboard
+-- ============================================================
+-- Dashboard kaitun (theo mẫu ore_sweep.lua / ui.lua): màn đen full + tắt render 3D, nút góc phải để ẩn (ẩn = bật lại 3D)
+local gui, uiHidden = nil, false
+local UI = {}
 local function FmtNum(n)
     n = tonumber(n) or 0
     if n >= 1e9 then return string.format("%.2fB", n / 1e9) end
@@ -1191,53 +375,31 @@ local function FmtNum(n)
     if n >= 1e3 then return string.format("%.1fk", n / 1e3) end
     return tostring(math.floor(n))
 end
-local function FmtTime(sec)
-    sec = math.max(0, math.floor(sec))
-    return ("%02d:%02d:%02d"):format(sec // 3600, (sec % 3600) // 60, sec % 60)
+local function FmtTime(s)
+    s = math.max(0, math.floor(s))
+    return string.format("%02d:%02d:%02d", s // 3600, (s % 3600) // 60, s % 60)
 end
-local GEM_SHORT = { "Moonstone", "Star Ruby", "Helium-3", "Nebulite", "Dark Matter" }
--- chỉ hiện số đang có trong inventory (như tab Space Mining), không hiện delta cho đỡ rối
-local function GemLine(sep, ids, short)
-    ids, short = ids or GEMS, short or GEM_SHORT
-    local t = {}
-    for i, id in ipairs(ids) do t[i] = ("%s %d"):format(short[i], CountItem(id)) end
-    return table.concat(t, sep or "   ")
-end
-local function ZoneLayer()
-    local loc = S.loc
-    local z, y = 0, 0
-    if loc and not loc.Destroyed then
-        z = ZoneOf(loc)
-        pcall(function() local pb = loc:GetPlayerBlock(lp) if pb then y = pb.Y end end)
-    end
-    return z, y
-end
-
--- ---- dashboard (theo mẫu ui.lua) ----
-local gui, uiHidden = nil, false
-local UI = {}
-if C["Show UI"] then
+local function CreateUI()
+    if not _UC["Show UI"] then return end
     pcall(function()
-        local old = lp.PlayerGui:FindFirstChild("OreSweepUI")
+        local old = lp.PlayerGui:FindFirstChild("SpaceMineKaitunUI")
         if old then old:Destroy() end
         local C_GOLD, C_DIM, C_WHITE, C_GREEN, C_PURPLE = Color3.fromRGB(255, 170, 0), Color3.fromRGB(200, 205, 220), Color3.new(1, 1, 1), Color3.fromRGB(80, 220, 120), Color3.fromRGB(180, 150, 255)
         gui = Instance.new("ScreenGui")
-        gui.Name = "OreSweepUI" gui.DisplayOrder = 999 gui.ResetOnSpawn = false gui.IgnoreGuiInset = true
+        gui.Name = "SpaceMineKaitunUI" gui.DisplayOrder = 999 gui.ResetOnSpawn = false gui.IgnoreGuiInset = true
         gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling gui.Parent = lp.PlayerGui
-        local black = C["UI Black Screen"] ~= false
+        local black = _UC["UI Black Screen"] ~= false
         local bg = Instance.new("Frame")
         bg.BackgroundColor3 = Color3.new(0, 0, 0) bg.BorderSizePixel = 0 bg.ZIndex = 999 bg.Parent = gui
         local container = Instance.new("Frame")
         container.BackgroundTransparency = 1 container.BorderSizePixel = 0 container.ZIndex = 1000 container.Parent = gui
         if black then
             bg.Size = UDim2.new(1, 0, 1, 0)
-            -- khung nội dung (y 0..370) neo giữa màn hình
-            container.Size = UDim2.new(1, 0, 0, 370)
+            container.Size = UDim2.new(1, 0, 0, 400)
             container.AnchorPoint = Vector2.new(0.5, 0.5)
             container.Position = UDim2.new(0.5, 0, 0.5, 0)
         else
-            -- panel nhỏ góc trái, không che màn hình
-            bg.Size = UDim2.new(0, 460, 0, 330) bg.Position = UDim2.new(0, 10, 0, 120) bg.BackgroundTransparency = 0.3
+            bg.Size = UDim2.new(0, 480, 0, 330) bg.Position = UDim2.new(0, 10, 0, 120) bg.BackgroundTransparency = 0.3
             Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 10)
             container.Size = bg.Size container.Position = bg.Position
         end
@@ -1253,18 +415,20 @@ if C["Show UI"] then
         end
         local function MkSep(y)
             local f = Instance.new("Frame")
-            f.Size = UDim2.new(0, 420 * sc, 0, 2) f.Position = UDim2.new(0.5, -210 * sc, 0, y * sc)
+            f.Size = UDim2.new(0, 460 * sc, 0, 2) f.Position = UDim2.new(0.5, -230 * sc, 0, y * sc)
             f.BackgroundColor3 = C_GOLD f.BackgroundTransparency = 0.4 f.BorderSizePixel = 0 f.ZIndex = 1000 f.Parent = container
         end
         MkText(lp.Name, 44, C_GOLD, true, 10, 50)
         MkSep(75)
-        UI.time   = MkText("Session Time: 00:00:00", 24, C_WHITE, true, 90, 32)
-        UI.coins  = MkText("Space Coins: 0", 22, C_GOLD, true, 130, 32)
-        UI.ore    = MkText("Ore: 0 (0/min)  |  Fail 0  Hop 0", 22, C_GREEN, true, 170, 30)
-        UI.gems   = MkText("---", 18, C_WHITE, false, 208, 28)
-        UI.zone   = MkText("Zone 0  y=0", 18, C_DIM, false, 242, 28)
-        UI.status = MkText("Status: init", 18, C_DIM, false, 276, 28)
-        MkSep(316)
+        UI.time    = MkText("Session Time: 00:00:00", 24, C_WHITE, true, 90, 32)
+        UI.coins   = MkText("Space Coins: 0", 22, C_GOLD, true, 130, 32)
+        UI.blocks  = MkText("Blocks 0 (0/min)", 20, C_GREEN, true, 170, 30)
+        UI.gems    = MkText("---", 18, C_WHITE, false, 206, 28)
+        UI.zone    = MkText("Zone 0  y=0  |  Pickaxe -", 18, C_DIM, false, 238, 28)
+        UI.quest   = MkText("Quest: -", 18, C_DIM, false, 268, 28)
+        UI.status  = MkText("Status: init", 18, C_DIM, false, 300, 28)
+        UI.last    = MkText("Last: -", 16, C_DIM, false, 330, 26)
+        MkSep(366)
 
         local toggleBtn = Instance.new("TextButton")
         toggleBtn.Size = UDim2.new(0, 36, 0, 36) toggleBtn.Position = UDim2.new(1, -48, 0, 10)
@@ -1278,190 +442,1660 @@ if C["Show UI"] then
             container.Visible = not uiHidden
             bg.Visible = not uiHidden
             toggleBtn.Text = uiHidden and "+" or "-"
-            -- ẩn dashboard = bật lại 3D (như ui.lua)
             if black then pcall(function() RunService:Set3dRenderingEnabled(uiHidden) end) end
         end)
     end)
 end
 local function UpdateUI()
     if not gui or not UI.time then return end
-    local el = math.max(1, os.clock() - S.stats.t0)
-    local z, y = ZoneLayer()
+    local el = math.max(1, os.clock() - Stats.start)
+    local coins = GetSpaceCoins()
     UI.time.Text   = "Session Time: " .. FmtTime(el)
-    UI.coins.Text  = "Space Coins: " .. FmtNum(SpaceCoins())
-    UI.ore.Text    = ("Ore: %d (%.0f/min)  |  Fail %d  Hop %d"):format(S.stats.ore, S.stats.ore / el * 60, S.stats.fail, S.stats.hops)
-    UI.gems.Text   = GemLine("   ")
-    UI.zone.Text   = ("Zone %d  y=%d"):format(z, y)
-    UI.status.Text = "Status: " .. tostring(S.status)
+    UI.coins.Text  = "Space Coins: " .. FmtNum(coins)
+    UI.blocks.Text = ("Blocks %d (%.0f/min)"):format(Stats.broken, Stats.broken / el * 60)
+    UI.gems.Text   = ("Moonstone %d   Star Ruby %d   Helium-3 %d   Nebulite %d   Dark Matter %d"):format(CountItem("Moonstone Gem"), CountItem("Star Ruby Gem"), CountItem("Helium-3 Gem"), CountItem("Nebulite Gem"), CountItem("Dark Matter Gem"))
+    UI.zone.Text   = ("Zone %d  y=%d  |  Pickaxe %s"):format(Stats.zone, Stats.layer, tostring(Stats.pickaxe))
+    UI.quest.Text  = "Quest: " .. tostring(Stats.quest)
+    UI.status.Text = "Status: " .. tostring(Bot.status)
+    UI.last.Text   = "Last: " .. tostring(Stats.lastEvent ~= "" and Stats.lastEvent or "-")
 end
-task.spawn(function()
-    while Alive() do
-        pcall(UpdateUI)
-        task.wait(0.5)
-    end
-end)
 
--- ---- Discord webhook ----
-local httpRequest = (syn and syn.request) or http_request or request or (fluxus and fluxus.request)
-local function SendWebhook(title, fields, color, mention)
-    local url = C["Webhook URL"]
-    if not url or url == "" or not httpRequest then return false end
-    local ok = pcall(function()
-        local tag = C["Discord Tag ID"]
+-- ============================================================
+-- Webhook
+-- ============================================================
+local function SendWebhook(title, desc, color)
+    local url = _UC["Webhook URL"]
+    if not url or url == "" or not httpRequest then return end
+    pcall(function()
+        local tag = _UC["Discord Tag ID"]
         local body = {
-            content = (mention and tag and tag ~= "") and ("<@" .. tag .. ">") or nil,
+            content = (tag ~= "" and ("<@" .. tag .. ">") or nil),
             embeds = { {
-                title = title, color = color or 0x3498db, fields = fields,
-                footer = { text = lp.Name .. " • Space Mine Ore Sweep v3.1" },
+                title = title, description = desc, color = color or 0x3498db,
+                footer = { text = lp.Name .. " • Space Mine Kaitun" },
             } },
         }
         httpRequest({ Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = HttpService:JSONEncode(body) })
     end)
-    return ok
 end
-local function StatusFields()
-    local el = math.max(1, os.clock() - S.stats.t0)
-    local z, y = ZoneLayer()
-    local f = {
-        { name = "Uptime", value = FmtTime(el), inline = true },
-        { name = "Zone / y", value = ("Zone %d  y=%d"):format(z, y), inline = true },
-        { name = "Ore farmed", value = ("%d (%.0f/min)"):format(S.stats.ore, S.stats.ore / el * 60), inline = true },
-        { name = "Fail / Buried / Hop", value = ("%d / %d / %d"):format(S.stats.fail, S.stats.buried, S.stats.hops), inline = true },
-        { name = "Space Coins", value = FmtNum(SpaceCoins()), inline = true },
-        { name = "Inventory gems", value = GemLine("\n"), inline = false },
-    }
-    if C["Auto Combine"] then f[#f + 1] = { name = "Combine", value = tostring(S.stats.combines), inline = true } end
-    if C["Auto Merchant"] then f[#f + 1] = { name = "Merchant bought", value = tostring(S.stats.merchant), inline = true } end
-    return f
+
+-- pet mới (Huge/Titanic/Gargantuan) -> webhook
+local function SnapshotPets()
+    local d = SaveData()
+    local t = {}
+    for uid, p in pairs(d.Inventory.Pet or {}) do
+        local id = p.id or ""
+        if id:find("^Huge ") or id:find("^Titanic ") or id:find("^Gargantuan ") then t[uid] = id end
+    end
+    return t
 end
-local function StatusWebhook(title, color, mention)
-    return SendWebhook(title or lp.Name, StatusFields(), color or 0x3498db, mention)
-end
-S.SendWebhook = StatusWebhook -- gọi tay: getgenv()._OreSweep.SendWebhook()
--- pet mới Huge/Titanic/Gargantuan -> webhook + tag
-local petSnap, petInit = {}, false
 local function CheckNewPets()
-    pcall(function()
-        local d = Save.Get()
-        for uid, p in pairs(d.Inventory.Pet or {}) do
-            local id = p.id or ""
-            if (id:find("^Huge ") or id:find("^Titanic ") or id:find("^Gargantuan ")) and not petSnap[uid] then
-                petSnap[uid] = id
-                if petInit then
-                    log("*** PET MỚI: %s ***", id)
-                    StatusWebhook("🎉 " .. id .. " – " .. lp.Name, 0xf1c40f, true)
+    local now = SnapshotPets()
+    for uid, id in pairs(now) do
+        if not Stats.pets[uid] then
+            Stats.pets[uid] = id
+            if next(Stats.pets) ~= nil and Stats.petsInit then
+                Stats.lastEvent = "NEW " .. id
+                Log("*** PET MỚI: %s ***", id)
+                SendWebhook("🎉 " .. id, ("Zone %d, layer %d\nBlocks: %d | Space Coins: %s"):format(Stats.zone, Stats.layer, Stats.broken, FmtNum(GetSpaceCoins())), 0xf1c40f)
+            end
+        end
+    end
+    Stats.petsInit = true
+end
+
+-- ============================================================
+-- Instance / zone
+-- ============================================================
+local function EnsureInstance()
+    if InstancingCmds.IsInInstance() then return true end
+    SetStatus("Enter event")
+    Log("Vào event %s", Config.InstanceName)
+    pcall(InstancingCmds.Enter, Config.InstanceName)
+    local t0 = os.clock()
+    repeat task.wait(0.5) until InstancingCmds.IsInInstance() or os.clock() - t0 > 25
+    return InstancingCmds.IsInInstance()
+end
+
+local function GetLocalWorld(timeout)
+    local t0 = os.clock()
+    while os.clock() - t0 < (timeout or 10) do
+        local ok, loc = pcall(BlockWorldClient.GetLocal)
+        if ok and loc and not loc.Destroyed then return loc end
+        task.wait(0.4)
+    end
+end
+
+local function HRP()
+    return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+end
+-- GetLocal() (world theo vị trí nhân vật) có khớp world đang farm và nhân vật đang trong vùng mine không
+local function SameWorld(loc)
+    local hrp = HRP()
+    if not hrp or not loc or loc.Destroyed then return false end
+    local ok, cur = pcall(BlockWorldClient.GetLocal)
+    if not ok or cur ~= loc then return false end
+    local inside = false
+    pcall(function() inside = loc:IsInsideXZ(hrp.Position) end)
+    return inside
+end
+-- sau khi tele về từ egg/máy: chờ tới khi GetLocal() khớp lại (tối đa 3 s)
+local function WaitWorld(loc)
+    local t0 = os.clock()
+    repeat task.wait(0.2) until SameWorld(loc) or os.clock() - t0 > 3
+end
+
+-- số khu (1-5) của một BlockWorld theo vị trí Origin (loc.Id không phải số khu)
+local function ZoneOf(loc)
+    if not loc or not loc.Origin then return 0 end
+    local p = loc.Origin.Position
+    local best, bd = 0, nil
+    for n, o in pairs(Config.ZoneOrigin) do
+        local d = (Vector2.new(o.X, o.Z) - Vector2.new(p.X, p.Z)).Magnitude
+        if not bd or d < bd then best, bd = n, d end
+    end
+    return best
+end
+local function TeleportToZoneTop(n)
+    local o = Config.ZoneOrigin[n]
+    local hrp = HRP()
+    if not o or not hrp then return false end
+    hrp.CFrame = CFrame.new(o + Vector3.new(0, 5.5, 0))
+    task.wait(1.5)
+    return true
+end
+-- về chỗ đang đào sau chuyến egg/máy. VERIFIED 21/09: tele thẳng từ khu 1 về chỗ sâu (y=-150) khu 2 -> block quanh đó chưa stream
+-- -> rơi xuyên -> floor watchdog của game ném lên mặt KHU 1. Nên: lên mặt khu trước, chờ block dưới chỗ cũ load, rồi mới xuống
+local function ReturnTo(loc, back)
+    local hrp = HRP()
+    if not hrp or not back then return end
+    local zone = ZoneOf(loc)
+    local top = Config.ZoneOrigin[zone]
+    if top and (back.Position - top).Magnitude > 12 then
+        hrp.CFrame = CFrame.new(top + Vector3.new(0, 5.5, 0))
+        local t0 = os.clock()
+        repeat
+            task.wait(0.25)
+            local okp, p = pcall(loc.WorldToBlockPos, loc, back.Position - Vector3.new(0, 3, 0))
+            local b = okp and p and loc:GetBlock(p)
+            if b and b.Part and b.Part.Parent and SameWorld(loc) then break end
+        until os.clock() - t0 > 4
+    end
+    hrp = HRP()
+    if hrp then hrp.CFrame = back end
+    task.wait(0.6)
+    WaitWorld(loc)
+    -- vẫn bị ném đi (rơi xuyên) -> lên mặt khu, bot tự đào xuống lại
+    hrp = HRP()
+    if hrp and (hrp.Position - back.Position).Magnitude > 30 and top then
+        Log("Về chỗ cũ thất bại (bị ném tới %s) -> lên mặt khu %d", tostring(hrp.Position), zone)
+        hrp.CFrame = CFrame.new(top + Vector3.new(0, 5.5, 0))
+        task.wait(1)
+    end
+end
+
+-- ============================================================
+-- Pickaxe
+-- ============================================================
+local PickTier, lastClaimAt = 1, 0
+local tierWarned = {}
+local function ToolTier(t)
+    local ok, dir = pcall(t.Directory, t)
+    return ok and dir and tonumber(dir.Tier) or 1
+end
+-- acc mới: pickaxe free (Scrap Pickaxe) là prop INTERACT.WoodenPickaxe (tag MiningFreePickaxe, nút E) cạnh chỗ spawn khu 1.
+-- VERIFIED 21/09: ClientModule của event gọi InstancingCmds.FireCustom("ClaimPickaxe") (= Network.Fire("Instancing_FireCustomFromClient", "ClaimPickaxe"));
+-- gửi thêm tên instance như bản cũ thì server không nhận -> acc mới kẹt "no pickaxe" mãi.
+local function ClaimFreePickaxe()
+    local hrp = HRP()
+    if not hrp then return false end
+    local prop
+    pcall(function() prop = workspace.__THINGS.__INSTANCE_CONTAINER.Active[Config.InstanceName].INTERACT:FindFirstChild("WoodenPickaxe") end)
+    local dest = prop and prop.Position or Vector3.new(17100, 15.9, -8102) -- vị trí prop khu 1
+    if (hrp.Position - dest).Magnitude > 8 then
+        hrp.CFrame = CFrame.new(dest + Vector3.new(0, 2.5, 4))
+        task.wait(1.2)
+    end
+    local ok, err = pcall(InstancingCmds.FireCustom, "ClaimPickaxe")
+    if not ok then pcall(Network.Fire, "Instancing_FireCustomFromClient", "ClaimPickaxe") end
+    Log("ClaimPickaxe -> %s %s", tostring(ok), tostring(err or ""))
+    local t0 = os.clock()
+    repeat task.wait(0.5) until ToolUtil.GetBestTool(lp, "Pickaxe") or os.clock() - t0 > 6
+    return ToolUtil.GetBestTool(lp, "Pickaxe") ~= nil
+end
+local function EnsurePickaxe()
+    local best = ToolUtil.GetBestTool(lp, "Pickaxe")
+    if not best then
+        SetStatus("Claim pickaxe")
+        Log("Chưa có pickaxe -> nhận pickaxe free")
+        if not ClaimFreePickaxe() then return false end
+        best = ToolUtil.GetBestTool(lp, "Pickaxe")
+        if not best then return false end
+        Stats.lastEvent = "Claimed " .. best:GetId()
+    end
+    Stats.pickaxe = best:GetId()
+    -- pickaxe khu N+1 = phần thưởng SpaceMineQuestN (DoQuests redeem); block Tier > pickaxe Tier thì KHÔNG đào được
+    local tier = ToolTier(best)
+    if tier ~= PickTier then
+        PickTier = tier
+        Log("Pickaxe: %s (Tier %d)", best:GetId(), tier)
+        table.clear(tierWarned)
+        if hardCache then table.clear(hardCache) end -- damage đổi -> tính lại block cứng
+    end
+    local sel = ToolUtil.GetSelectedTool(lp, "Pickaxe")
+    if not sel or sel:GetId() ~= best:GetId() then
+        Log("Chọn pickaxe tốt nhất: %s", best:GetId())
+        pcall(ToolCmds.SetSelectedTool, best)
+        task.wait(0.5)
+    end
+    return true
+end
+
+-- ============================================================
+-- Quests (pickaxe)
+-- ============================================================
+-- trả về: map blockId -> số còn thiếu (để ưu tiên), và tên quest đang làm
+local function QuestNeeds()
+    local d = SaveData()
+    local needs, label = {}, "done"
+    Bot.questAnyLeft = 0
+    local nq = d.NPCQuests or {}
+    for i, qid in ipairs(Config.Quests) do
+        local q = nq[qid]
+        if not q then
+            -- chưa được assign: quest i chỉ mở khi quest i-1 xong; Ensure để server tạo
+            if i == 1 or (nq[Config.Quests[i - 1]] and nq[Config.Quests[i - 1]].Completed) then
+                label = qid .. " (chưa nhận)"
+                return needs, label, qid, "ensure"
+            end
+        elseif not q.Completed then
+            local parts = {}
+            for _, sub in ipairs(q.Quests or {}) do
+                local left = (sub.Amount or 0) - (sub.Progress or 0)
+                if left > 0 then
+                    if sub.OreID then needs[sub.OreID] = left else Bot.questAnyLeft = (Bot.questAnyLeft or 0) + left end
+                    table.insert(parts, (sub.OreID or "any") .. " " .. (sub.Progress or 0) .. "/" .. (sub.Amount or 0))
+                end
+            end
+            label = qid:gsub("SpaceMine", "") .. ": " .. (#parts > 0 and table.concat(parts, ", ") or "READY")
+            return needs, label, qid, (#parts == 0) and "ready" or "progress"
+        end
+    end
+    return needs, label, nil, "done"
+end
+
+local lastQuestAt = 0
+local function DoQuests()
+    if not _UC["Auto Quest"] or os.clock() - lastQuestAt < Config.QuestEvery then return end
+    lastQuestAt = os.clock()
+    local needs, label, qid, state = QuestNeeds()
+    -- gate quest của khu kế tiếp (vd "Mine 25 Comet Ice" = OreID Sand) cũng được ưu tiên
+    local qa = InstanceVars().QuestActive
+    Bot.gateNeeds = {}
+    if qa and qa.OreID and (qa.Amount or 0) > (qa.Progress or 0) then
+        needs[qa.OreID] = math.max(needs[qa.OreID] or 0, qa.Amount - (qa.Progress or 0))
+        Bot.gateNeeds[qa.OreID] = true -- gate quest (mở khu kế) không bị Hard Rock Last hoãn
+        label = label .. (" | gate%s: %s %d/%d"):format(tostring(InstanceVars().QuestZoneNumber or "?"), qa.OreID, qa.Progress or 0, qa.Amount or 0)
+    end
+    Stats.quest = label
+    Bot.questNeeds = needs
+    if state == "ensure" and qid then
+        pcall(Network.Invoke, "NPC Quests: Ensure", qid)
+    elseif state == "ready" and qid then
+        -- kiểm tra gem trả (RewardCost)
+        local dir = RequireDir("NPCQuests", "NPCQuests | " .. qid)
+        local cost = dir and dir.RewardCost and dir.RewardCost._data
+        if cost and CountItem(cost.id) < (cost._am or 1) then
+            Stats.quest = label .. (" | cần %d %s"):format(cost._am or 1, cost.id)
+            return
+        end
+        Log("Claim %s ...", qid)
+        local ok, res, err = pcall(Network.Invoke, "NPC Quests: Redeem", qid)
+        Log("Redeem %s -> %s %s", qid, tostring(ok and res), tostring(err or ""))
+        if ok and res then
+            Stats.lastEvent = "Claimed " .. qid
+            SendWebhook("⛏ Pickaxe mới", qid .. " claimed", 0x2ecc71)
+            task.wait(1.5)
+            EnsurePickaxe()
+        end
+    end
+end
+
+-- ============================================================
+-- Zones (gate)
+-- ============================================================
+local lastZoneAt = 0
+local function DoZones(loc)
+    if os.clock() - lastZoneAt < Config.ZoneEvery then return end
+    lastZoneAt = os.clock()
+    local targetZone = math.clamp(tonumber(_UC["Target Zone"]) or 5, 1, 5)
+    local highest = HighestUnlockedZone()
+    -- mở khu kế tiếp
+    if _UC["Auto Unlock Zone"] and highest < targetZone then
+        local nextZone = highest + 1
+        local iv = InstanceVars()
+        local qa = iv.QuestActive
+        local questOk = (not qa) or ((qa.Progress or 0) >= (qa.Amount or 0))
+        if questOk then
+            local ok, res, err = pcall(Network.Invoke, "InstanceZones_RequestPurchase", Config.InstanceName, nextZone)
+            if ok and res then
+                Log("Mở khu %d thành công", nextZone)
+                Stats.lastEvent = "Unlock zone " .. nextZone
+                SendWebhook("🚪 Mở khu " .. nextZone, "Space Coins còn " .. FmtNum(GetSpaceCoins()), 0x9b59b6)
+                task.wait(1)
+                highest = HighestUnlockedZone()
+            else
+                Dbg("Chưa mở được khu %d: %s (coins %s, quest %s/%s)", nextZone, tostring(res or err), FmtNum(GetSpaceCoins()), tostring(qa and qa.Progress), tostring(qa and qa.Amount))
+            end
+        end
+    end
+    -- đứng đúng khu (không đi quá khu chưa lấy pickaxe)
+    local want = math.min(targetZone, highest, PickaxeZone())
+    local cur = ZoneOf(loc)
+    if cur ~= want then
+        Log("Chuyển sang khu %d (đang ở %d)", want, cur)
+        SetStatus("Tele zone " .. want)
+        TeleportToZoneTop(want)
+        return true -- world đổi, vòng ngoài lấy lại loc
+    end
+end
+
+-- ============================================================
+-- Event upgrades / boosters / merchant / combine
+-- ============================================================
+local lastUpgradeAt = 0
+local function DoUpgrades()
+    if not _UC["Auto Upgrade"] or os.clock() - lastUpgradeAt < Config.UpgradeEvery then return end
+    lastUpgradeAt = os.clock()
+    local d = SaveData()
+    local owned = d.EventUpgrades or {}
+    local gems = CountItem(Config.UpgradeGem) - (tonumber(_UC["Upgrade Reserve"]) or 0)
+    -- không mua nếu quest đang cần Helium-3 Gem làm RewardCost (quest 4/5 cần Star Ruby, nên thường ok)
+    for _, id in ipairs(Config.Upgrades) do
+        local dir = RequireDir("EventUpgrades", "EventUpgrade | " .. id)
+        if dir and dir.TierCosts then
+            local tier = owned[id] or 0
+            local nextCost = dir.TierCosts[tier + 1]
+            if nextCost and nextCost._data and gems >= (nextCost._data._am or 0) then
+                local ok, res, err = pcall(Network.Invoke, "EventUpgrades: Purchase", id)
+                Log("Upgrade %s T%d (%d gem) -> %s %s", id, tier + 1, nextCost._data._am or 0, tostring(ok and res), tostring(err or ""))
+                if ok and res then
+                    Stats.lastEvent = ("%s T%d"):format(dir.Name or id, tier + 1)
+                    return -- 1 upgrade / chu kỳ
                 end
             end
         end
-        petInit = true
-    end)
-end
-CheckNewPets()
-task.spawn(function()
-    if not C["Webhook URL"] or C["Webhook URL"] == "" then return end
-    task.wait(5)
-    StatusWebhook(lp.Name .. " – start", 0x2ecc71)
-    local last = os.clock()
-    while Alive() do
-        task.wait(5)
-        CheckNewPets()
-        if os.clock() - last > (tonumber(C["Webhook Every"]) or 600) then
-            last = os.clock()
-            StatusWebhook()
-        end
     end
-end)
-local afkConn
-if C["Anti AFK"] then
-    afkConn = lp.Idled:Connect(function() pcall(function() VirtualUser:CaptureController() VirtualUser:ClickButton2(Vector2.new()) end) end)
-end
-local keyConn = UIS.InputBegan:Connect(function(input, gp)
-    if not gp and C["Stop Key"] and input.KeyCode == C["Stop Key"] then S.Stop("stop key") end
-end)
-function S.Stop(reason)
-    S.running = false
-    HoldUnpatch()
-    pcall(function() if afkConn then afkConn:Disconnect() end end)
-    pcall(function() if keyConn then keyConn:Disconnect() end end)
-    pcall(function() if gui then gui:Destroy() end end)
-    pcall(function() RunService:Set3dRenderingEnabled(true) end)
-    log("Stop (%s). ore %d blocks %d fail %d", tostring(reason), S.stats.ore, S.stats.blocks, S.stats.fail)
 end
 
--- ------------------------------------------------------------
--- main loop
--- ------------------------------------------------------------
-log("Start. Zone %s | Ores %s | Combine %s | Idle Mine %s", tostring(C["Target Zone"]),
-    (function() local t = {} for k, v in pairs(C["Ores"]) do if v then t[#t + 1] = k end end table.sort(t) return table.concat(t, "/") end)(),
-    tostring(C["Auto Combine"]), tostring(C["Idle Mine"]))
-local lastReport = os.clock()
-task.spawn(function()
+local boosterUsedAt = {}
+local lastBoosterAt = 0
+local function DoBoosters()
+    if not _UC["Auto Booster"] or os.clock() - lastBoosterAt < Config.BoosterEvery then return end
+    lastBoosterAt = os.clock()
+    for _, id in ipairs(Config.Boosters) do
+        if os.clock() - (boosterUsedAt[id] or -1e9) > Config.BoosterDuration then
+            local uid = FindConsumableUID(id)
+            if uid then
+                local ok, res = pcall(Network.Invoke, "Consumables_Consume", uid, 1)
+                Log("Dùng %s -> %s", id, tostring(ok and res))
+                if ok and res then boosterUsedAt[id] = os.clock() end
+            end
+        end
+    end
+end
+
+local lastBombAt = 0
+local function UseBomb(id)
+    local uid = FindConsumableUID(id)
+    if not uid then return false end
+    local ok, res = pcall(Network.Invoke, "Consumables_Consume", uid, 1)
+    if ok and res then
+        lastBombAt = os.clock()
+        Stats.bombs = (Stats.bombs or 0) + 1
+        Dbg("Bom: %s", id)
+        return true
+    end
+    Log("Dùng %s thất bại: %s", id, tostring(res))
+    return false
+end
+local function DoBombs(loc)
+    if not _UC["Auto Bomb"] or os.clock() - lastBombAt < (tonumber(_UC["Bomb Every"]) or 12) then return end
+    if not loc or loc.Respawning or Bot.autoMineOn then return end
+    for _, id in ipairs(_UC["Bomb Use"] or {}) do
+        if UseBomb(id) then return end -- không chờ nổ: bom phá song song, bot đào tiếp ngay
+    end
+    lastBombAt = os.clock() -- không có bom -> chờ chu kỳ sau
+end
+
+local lastMerchantAt = 0
+local merchantSeed, merchantDone = nil, {}
+local function DoMerchant()
+    if not _UC["Auto Merchant"] or os.clock() - lastMerchantAt < Config.MerchantEvery then return end
+    lastMerchantAt = os.clock()
+    if GetSpaceCoins() <= (tonumber(_UC["Merchant Reserve"]) or 0) then return end
+    -- Merchant_GetOffers trả nil (offer sinh client-side từ Seed) -> cứ RequestPurchase từng slot, server tự validate.
+    -- MerchantPurchases.SpaceMineMerchant: Seed đổi = merchant refresh, Purchases[slot] = số lần đã mua
+    local mp = SaveData().MerchantPurchases and SaveData().MerchantPurchases.SpaceMineMerchant or {}
+    if mp.Seed ~= merchantSeed then merchantSeed = mp.Seed merchantDone = {} end
+    local bought = {}
+    for slot = 1, tonumber(_UC["Merchant Slots"]) or 6 do
+        if not merchantDone[slot] then
+            local n = 0
+            for _ = 1, 3 do -- stock tối đa 3
+                local okb, res = pcall(Network.Invoke, "Merchant_RequestPurchase", "SpaceMineMerchant", slot)
+                if okb and res == true then n += 1 task.wait(0.4) else break end
+                if GetSpaceCoins() <= (tonumber(_UC["Merchant Reserve"]) or 0) then break end
+            end
+            merchantDone[slot] = true -- hết hàng / khoá / đã mua -> chờ refresh (Seed đổi)
+            if n > 0 then bought[#bought + 1] = ("slot%d x%d"):format(slot, n) end
+        end
+    end
+    if #bought > 0 then
+        Log("Merchant mua: %s (coins còn %s)", table.concat(bought, ", "), FmtNum(GetSpaceCoins()))
+        Stats.lastEvent = "Merchant " .. table.concat(bought, ",")
+    end
+end
+
+local lastCombineAt = 0
+-- Remote PetCraftingMachine_Craft bị server assert với mọi arg đã thử -> dùng chính UI của máy:
+-- PlayerGui._MACHINES.PetCraftingMachine.Frame: UsingFrame.Content["<recipe>"] (chọn) rồi ObjectiveFrame.SubmitHolder.OkOne (craft 1)
+local function PressButton(btn)
+    local ok, conns = pcall(getconnections, btn.Activated)
+    if ok and #conns > 0 then
+        for _, c in ipairs(conns) do if c.Function then task.spawn(c.Function) end end
+        return true
+    end
+    if firesignal then pcall(firesignal, btn.Activated) return true end
+    return false
+end
+local function DoCombine()
+    if not _UC["Auto Combine"] or os.clock() - lastCombineAt < Config.CombineEvery then return end
+    lastCombineAt = os.clock()
+    local gui = lp.PlayerGui:FindFirstChild("_MACHINES")
+    local frame = gui and gui:FindFirstChild("PetCraftingMachine") and gui.PetCraftingMachine:FindFirstChild("Frame")
+    if not frame then return end -- UI máy chưa được tạo (chưa từng vào khu 5 / chưa load)
+    local content = frame:FindFirstChild("UsingFrame") and frame.UsingFrame:FindFirstChild("Content")
+    local okOne = frame:FindFirstChild("ObjectiveFrame") and frame.ObjectiveFrame:FindFirstChild("SubmitHolder") and frame.ObjectiveFrame.SubmitHolder:FindFirstChild("OkOne")
+    if not content or not okOne then return end
+    local d = SaveData()
+    local savings = (d.EventUpgrades and d.EventUpgrades.SpaceMineLessOresRequired) or 0
+    local mult = 1 - ({ 0, 10, 20, 30, 40, 50 })[math.clamp(savings, 0, 5) + 1] / 100
+    local upTo = tonumber(_UC["Combine Up To"]) or 4
+    local keep = tonumber(_UC["Combine Keep"]) or 0
+    local crafted = {}
+    -- rung cao trước (gem hiếm trước), tối đa 6 lần craft / chu kỳ
+    local budget = 6
+    for i = #Config.CombineRecipes, 1, -1 do
+        local r = Config.CombineRecipes[i]
+        if r.idx <= upTo and budget > 0 then
+            local need = math.ceil(r.n * mult)
+            local btn = content:FindFirstChild(tostring(r.idx))
+            while budget > 0 and btn and CountItem(r.input) - keep >= need do
+                local out0 = CountItem(r.out)
+                local in0 = CountItem(r.input)
+                PressButton(btn) task.wait(0.5)
+                PressButton(okOne) task.wait(1.3)
+                budget -= 1
+                if CountItem(r.out) > out0 or CountItem(r.input) < in0 then
+                    crafted[r.out] = (crafted[r.out] or 0) + 1
+                else
+                    break -- không craft được (thiếu gem theo server / UI đổi) -> sang rung khác
+                end
+            end
+        end
+    end
+    local parts = {}
+    for k, v in pairs(crafted) do parts[#parts + 1] = k .. " x" .. v end
+    if #parts > 0 then
+        Log("Combine: %s", table.concat(parts, ", "))
+        Stats.lastEvent = "Combine " .. table.concat(parts, ",")
+    end
+end
+
+-- ============================================================
+-- Egg event (VERIFIED 21/09): CustomEggsCmds.All() -> egg{_uid,_id,_position}; remote Network.Invoke("CustomEggs_Hatch", uid, count)
+-- server check khoảng cách ("You're too far away!") -> tele lên egg, chờ ~1 s vị trí replicate rồi invoke; thiếu tiền -> "You need more Space Coins"
+-- ============================================================
+local function EggCost(id)
+    local ok, cost = pcall(function()
+        for _, m in ipairs(Directory.Eggs.Events.Mining:GetChildren()) do
+            local d = require(m)
+            if d._id == id then return tonumber(d.overrideCost) end
+        end
+    end)
+    return ok and cost or ({ ["Moonstone Egg"] = 100, ["Star Ruby Egg"] = 300, ["Helium-3 Egg"] = 1000, ["Nebulite Egg"] = 2000, ["Dark Matter Egg"] = 4000 })[id] or 1e9
+end
+local function FindEgg(id)
+    if not CustomEggsCmds then return nil end
+    local ok, all = pcall(CustomEggsCmds.All)
+    if not ok or type(all) ~= "table" then return nil end
+    for _, e in pairs(all) do
+        if e._id == id and not e._destroyed then return e end
+    end
+end
+-- coins phải giữ lại: Egg Reserve + (Egg Keep Gate: giá cổng khu kế tiếp chưa mở, tới Target Zone)
+local function EggReserve()
+    local r = tonumber(_UC["Egg Reserve"]) or 0
+    if _UC["Egg Keep Gate"] then
+        local highest = HighestUnlockedZone()
+        local target = math.clamp(tonumber(_UC["Target Zone"]) or 5, 1, 5)
+        if highest < target and _UC["Auto Unlock Zone"] then r = math.max(r, Config.ZoneGateCost[highest + 1] or 0) end
+    end
+    return r
+end
+-- ẩn animation mở trứng (port từ map_auto): Egg Opening Frontend đọc workspace:GetAttribute("GlobalInstantHatch") -> mở tức thì,
+-- không hiện model trứng "Click to open!"; xoá GUI EggOpening/HatchAnimation + hiệu ứng Lighting; giữ Variables.OpeningEgg = 0 để queue không kẹt
+local eggAnimConns = {}
+local function HideEggAnim()
+    if not _UC["Hide Egg Anim"] then return end
+    pcall(function()
+        workspace:SetAttribute("GlobalInstantHatch", true)
+        workspace:SetAttribute("InstantHatch", true)
+        workspace:SetAttribute("EggSkipAnimation", true)
+    end)
+    local function patch(mod)
+        pcall(function()
+            if mod and type(mod.PlayEggAnimation) == "function" then
+                if setreadonly then setreadonly(mod, false) end
+                mod.PlayEggAnimation = function() end
+            end
+        end)
+    end
+    pcall(function() patch(require(Client:WaitForChild("HatchingCmds", 3))) end)
+    patch(EggCmds)
+    task.spawn(function()
+        local ok, Variables = pcall(function() return require(RS.Library:WaitForChild("Variables", 3)) end)
+        if not ok or type(Variables) ~= "table" then return end
+        while Alive() do
+            pcall(function() Variables.OpeningEgg = 0 end)
+            task.wait(0.5)
+        end
+    end)
+    local function killFx(child)
+        local n = child.Name
+        if n:find("EggOpening", 1, true) or n:find("Hatch", 1, true) then pcall(function() child:Destroy() end) end
+    end
+    local function killGui(child)
+        if child:IsA("ScreenGui") and (child.Name:find("EggOpening", 1, true) or child.Name:find("HatchAnimation", 1, true)) then
+            pcall(function() child.Enabled = false child:Destroy() end)
+        end
+    end
+    pcall(function()
+        eggAnimConns[#eggAnimConns + 1] = Lighting.ChildAdded:Connect(killFx)
+        for _, v in ipairs(Lighting:GetChildren()) do killFx(v) end
+        eggAnimConns[#eggAnimConns + 1] = lp.PlayerGui.ChildAdded:Connect(killGui)
+        for _, v in ipairs(lp.PlayerGui:GetChildren()) do killGui(v) end
+    end)
+    Log("Hide Egg Anim: GlobalInstantHatch on")
+end
+
+-- Free Rewards (VERIFIED 21/09): Save.FreeGiftsTime = giây đã chơi, Save.FreeGiftsRedeemed = {id...}; __DIRECTORY.FreeGifts "FreeGift | N".WaitTime
+-- -> quà N sẵn sàng khi FreeGiftsTime >= WaitTime và chưa redeem; remote Network.Invoke("Redeem Free Gift", N) -> true
+local giftWait, lastGiftAt = nil, 0
+local function DoFreeGifts()
+    if not _UC["Auto Free Gifts"] or os.clock() - lastGiftAt < 30 then return end
+    lastGiftAt = os.clock()
+    if not giftWait then
+        giftWait = {}
+        pcall(function()
+            for _, m in ipairs(Directory.FreeGifts:GetChildren()) do
+                local d = require(m)
+                if tonumber(d.Id) then giftWait[tonumber(d.Id)] = tonumber(d.WaitTime) or 0 end
+            end
+        end)
+    end
+    local d = SaveData()
+    local played = tonumber(d.FreeGiftsTime) or 0
+    local done = {}
+    for _, id in ipairs(d.FreeGiftsRedeemed or {}) do done[tonumber(id)] = true end
+    local got = {}
+    for id = 1, 12 do
+        local wait = giftWait[id]
+        if wait and not done[id] and played >= wait then
+            local ok, res = pcall(Network.Invoke, "Redeem Free Gift", id)
+            if ok and res then got[#got + 1] = tostring(id) end
+            task.wait(0.3)
+        end
+    end
+    if #got > 0 then
+        Log("Free Rewards: claim quà #%s", table.concat(got, ","))
+        Stats.lastEvent = "Free gift #" .. table.concat(got, ",")
+    end
+end
+
+local function GameAutoMineOn()
+    local en = false
+    pcall(function() en = AutoMineCmds.IsEnabled() end)
+    return en or Bot.autoMineOn
+end
+local MachinePass -- định nghĩa bên dưới (máy Gold/Rainbow)
+-- hút orb (port từ map_auto AutoMagnetBypass): client tính tầm hút orb qua EnchantCmds.GetPower("Super Magnet"/"Magnet")
+local magnetOrig
+local function MagnetPatch()
+    if not _UC["Auto Magnet"] or magnetOrig then return end
+    pcall(function()
+        local E = require(Client:WaitForChild("EnchantCmds", 5))
+        if type(E.GetPower) ~= "function" then return end
+        pcall(setreadonly, E, false)
+        local SO = getgenv()._SpaceMineOrig
+        SO.GetPower = SO.GetPower or E.GetPower
+        magnetOrig = { E = E, GetPower = SO.GetPower }
+        local raw = SO.GetPower
+        E.GetPower = function(name, ...)
+            if name == "Super Magnet" or name == "Magnet" then return 9999 end
+            return raw(name, ...)
+        end
+        Log("Auto Magnet: GetPower(Magnet) = 9999")
+    end)
+end
+local function MagnetUnpatch()
+    if magnetOrig and Latest() then pcall(function() magnetOrig.E.GetPower = magnetOrig.GetPower end) magnetOrig = nil end
+end
+
+-- Mailbox (21/09): remote tên obfuscate THEO SERVER (phiên này YS_Load = tải hộp thư -> {Inbox={{uuid=...}}}, RD_Ingest = Claim All với list uuid;
+-- rejoin là đổi tên) -> đọc tên lúc chạy từ constants closure trong PlayerScripts.Scripts.GUIs.Mailbox; fallback tên thật "Mailbox: Request"/"Mailbox: Claim All".
+-- Chưa test với thư thật (acc test không có thư).
+local mailRemotes
+local function MailRemotes()
+    if mailRemotes then return mailRemotes end
+    local r = {}
+    pcall(function()
+        if not filtergc then return end
+        local function pick(marker)
+            local ok, fs = pcall(filtergc, "function", { Constants = { marker } }, false)
+            for _, f in ipairs(fs or {}) do
+                if tostring(debug.getinfo(f).source):find("Mailbox", 1, true) then
+                    for _, c in pairs(debug.getconstants(f)) do
+                        if type(c) == "string" and c:match("^%u%u_%a+$") then return c end
+                    end
+                end
+            end
+        end
+        r.claim = pick("Are you sure you want to claim ALL mail?")
+        r.load = pick("Inbox Updated")
+    end)
+    r.claim = r.claim or "Mailbox: Claim All"
+    r.load = r.load or "Mailbox: Request"
+    mailRemotes = r
+    Log("Mailbox remotes: load=%s claim=%s", r.load, r.claim)
+    return r
+end
+local lastMailAt = 0
+local function DoMail()
+    if not _UC["Auto Mail"] or os.clock() - lastMailAt < (tonumber(_UC["Mail Every"]) or 300) then return end
+    lastMailAt = os.clock()
+    local r = MailRemotes()
+    local ok, box = pcall(Network.Invoke, r.load)
+    if not ok or type(box) ~= "table" or type(box.Inbox) ~= "table" then return end
+    local uuids = {}
+    for _, mail in pairs(box.Inbox) do
+        local uuid = type(mail) == "table" and (mail.uuid or mail.UUID)
+        if uuid then uuids[#uuids + 1] = uuid end
+    end
+    if #uuids == 0 then return end
+    local okc, res, err = pcall(Network.Invoke, r.claim, uuids) -- như nút Claim All của GUI: 1 invoke với list uuid
+    Log("Mailbox: claim %d thư -> %s %s", #uuids, tostring(okc and res), tostring(err or ""))
+    if okc and res then Stats.lastEvent = "Mail x" .. #uuids end
+end
+
+local lastEggAt, nextEggWait = 0, 0
+local function DoEggs(loc)
+    if not _UC["Auto Egg"] or not CustomEggsCmds then return end
+    if os.clock() - lastEggAt < nextEggWait then return end
+    local ev = _UC["Egg Every"]
+    local lo, hi = 10, 20
+    if type(ev) == "table" then lo, hi = tonumber(ev[1]) or 10, tonumber(ev[2]) or 20 elseif tonumber(ev) then lo, hi = tonumber(ev), tonumber(ev) end
+    lastEggAt = os.clock()
+    nextEggWait = math.random(math.floor(lo * 10), math.floor(math.max(lo, hi) * 10)) / 10
+    if not loc or loc.Respawning or GameAutoMineOn() then return end -- Auto Mine của game đang bật thì nó kéo nhân vật xuống ngay -> "too far"
+    -- chọn egg
+    local id = _UC["Egg"]
+    if id == nil or id == "auto" then id = Config.ZoneEgg[HighestUnlockedZone()] end
+    local cost = EggCost(id)
+    local avail = GetSpaceCoins() - EggReserve()
+    if avail < cost then return end
+    local egg = FindEgg(id)
+    if not egg or not egg._position then Dbg("Egg %s chưa load (CustomEggsCmds)", tostring(id)) return end
+    -- số trứng
+    local maxHatch = 1
+    pcall(function() maxHatch = EggCmds and EggCmds.GetMaxHatch() or SaveData().EggHatchCount or 1 end)
+    pcall(function() local m = egg:GetMaxEggCount() if tonumber(m) and m > 0 then maxHatch = math.min(maxHatch, m) end end)
+    local want = _UC["Egg Count"]
+    local n = math.min(maxHatch, math.floor(avail / cost), (tonumber(want) and tonumber(want) > 0) and tonumber(want) or maxHatch)
+    if n < 1 then return end
+    -- tele lên egg (giữ chỗ đang đào để quay về)
+    local hrp = HRP()
+    if not hrp then return end
+    local back = hrp.CFrame
+    SetStatus(("egg %s x%d"):format(id, n))
+    local pos = egg._position
+    hrp.CFrame = CFrame.new(pos + Vector3.new(0, 1, 5), pos)
+    task.wait(1.1)
+    local ok, res, err = false, false, "stopped"
+    for _ = 1, 4 do -- vị trí replicate ~1 s; "too far" thì chờ thêm
+        if not Bot.running then break end
+        ok, res, err = pcall(Network.Invoke, "CustomEggs_Hatch", egg._uid, n)
+        if not (ok and res == false and tostring(err):find("far")) then break end
+        task.wait(0.5)
+    end
+    if ok and res then
+        Stats.eggs += n
+        Stats.lastEvent = ("Egg %s x%d"):format(id, n)
+        Log("Mở %s x%d (coins còn %s)", id, n, FmtNum(GetSpaceCoins()))
+        task.wait(0.8) -- chờ pet mới vào túi rồi mới ra máy
+        MachinePass()
+        if _UC["Equip Best Pets"] then pcall(Network.Fire, "SM_Optimize") end
+    else
+        Log("Mở %s x%d thất bại: %s", id, n, tostring(err or res))
+        -- server từ chối (thiếu tiền theo server / egg khoá) -> nghỉ lâu hơn
+        nextEggWait = math.max(nextEggWait, 30)
+    end
+    -- quay về chỗ đang đào
+    ReturnTo(loc, back)
+    return true -- đã tele đi/về: client có thể dựng lại BlockWorld -> vòng ngoài phải lấy lại loc
+end
+
+-- ============================================================
+-- Máy Gold / Rainbow khu 1 (VERIFIED 21/09): đứng lên INTERACT.Machines.<GoldMachine|RainbowMachine>.Pad (MachineCmds.IsStandingOn true)
+-- rồi Network.Invoke("GoldMachine_Activate" | "RainbowMachine_Activate", petUID, soLuongCraft) -> true. Mỗi craft ăn 10 pet (trừ mastery GoldReduction/RainbowReduction)
+-- Chỉ dùng pet DƯ ngoài số đang equip (Save.EquippedPets) để không tụt damage; xong gọi SM_Optimize equip lại
+-- ============================================================
+local eventPetSet
+local function EventPetSet()
+    if eventPetSet then return eventPetSet end
+    eventPetSet = {}
+    local ok = pcall(function()
+        local m = require(RS.Library.Modules.InstanceDamageModules.SpaceMiningEvent)
+        for id in pairs(m.PET_EXTRA_DAMAGE) do eventPetSet[id] = true end
+    end)
+    if not ok or not next(eventPetSet) then for _, id in ipairs(Config.EventPets) do eventPetSet[id] = true end end
+    return eventPetSet
+end
+local function MachineCost(kind)
+    local cost = 10
+    pcall(function()
+        local perk = kind == "Gold" and "GoldReduction" or "RainbowReduction"
+        if MasteryCmds and MasteryCmds.HasPerk("Pets", perk) then cost = math.max(1, 10 - (MasteryCmds.GetPerkPower("Pets", perk) or 0)) end
+    end)
+    return cost
+end
+local function EquippedCount()
+    local t = {}
+    pcall(function()
+        for k, e in pairs(SaveData().EquippedPets or {}) do
+            local uid = type(e) == "table" and (e.euid or e.uid or e._uid) or (type(e) == "string" and e) or (type(k) == "string" and k)
+            if uid then t[uid] = (t[uid] or 0) + 1 end
+        end
+    end)
+    return t
+end
+-- danh sách { uid, id, n } cho máy kind ("Gold": pet thường -> gold, "Rainbow": pet gold -> rainbow)
+local function MachineCandidates(kind)
+    local cost = MachineCost(kind)
+    local eq = EquippedCount()
+    local onlyEvent = _UC["Machine Pets"] ~= "all"
+    local set = EventPetSet()
+    local list = {}
+    for uid, p in pairs(SaveData().Inventory.Pet or {}) do
+        if type(p) == "table" and p.id and not p.l and not p.lock then
+            local pt = p.pt or 0
+            local okKind = (kind == "Gold" and pt == 0) or (kind == "Rainbow" and pt == 1)
+            if okKind and (not onlyEvent or set[p.id]) then
+                local avail = (p._am or 1) - (eq[uid] or 0)
+                local n = math.floor(avail / cost)
+                if n >= 1 then list[#list + 1] = { uid = uid, id = p.id, n = n } end
+            end
+        end
+    end
+    return list, cost
+end
+local function MachinePad(name)
+    local ok, pad = pcall(function()
+        return workspace.__THINGS.__INSTANCE_CONTAINER.Active[Config.InstanceName].INTERACT.Machines[name].Pad
+    end)
+    return ok and pad or nil
+end
+local function RunMachine(kind, list)
+    local name = kind .. "Machine"
+    local pad = MachinePad(name)
+    local hrp = HRP()
+    if not pad or not hrp then return 0 end
+    hrp.CFrame = CFrame.new(pad.Position + Vector3.new(0, 3.5, 0))
+    local t0 = os.clock()
+    repeat
+        task.wait(0.3)
+        local standing = false
+        pcall(function() standing = MachineCmds and MachineCmds.IsStandingOn(name) end)
+        if standing then break end
+    until os.clock() - t0 > 4
+    task.wait(0.8) -- server nhận vị trí
+    local made = 0
+    for _, c in ipairs(list) do
+        local ok, res, err = pcall(Network.Invoke, name .. "_Activate", c.uid, c.n)
+        if ok and res then
+            made += c.n
+            Dbg("%s: %s x%d", name, c.id, c.n)
+        else
+            Log("%s %s x%d thất bại: %s", name, c.id, c.n, tostring(err or res))
+            if tostring(err or res):find("far") then break end
+        end
+        task.wait(0.5)
+    end
+    return made
+end
+-- chạy ngay sau khi mở egg (đang ở trên mặt, cùng chuyến): không tự tele về, DoEggs lo ReturnTo
+MachinePass = function()
+    if not (_UC["Auto Gold"] or _UC["Auto Rainbow"]) or not Bot.running then return end
+    local goldList = _UC["Auto Gold"] and MachineCandidates("Gold") or {}
+    local rbList = _UC["Auto Rainbow"] and MachineCandidates("Rainbow") or {}
+    if #goldList == 0 and #rbList == 0 then return end
+    local g, r = 0, 0
+    if #goldList > 0 then SetStatus("gold machine") g = RunMachine("Gold", goldList) end
+    if g > 0 and _UC["Auto Rainbow"] then task.wait(0.8) rbList = MachineCandidates("Rainbow") end -- gold vừa ra có thể đủ 10 -> rainbow luôn
+    if #rbList > 0 then SetStatus("rainbow machine") r = RunMachine("Rainbow", rbList) end
+    Stats.gold += g
+    Stats.rainbow += r
+    if g > 0 or r > 0 then
+        Stats.lastEvent = ("Gold +%d  Rainbow +%d"):format(g, r)
+        Log("Máy: gold +%d, rainbow +%d", g, r)
+        if _UC["Equip Best Pets"] then pcall(Network.Fire, "SM_Optimize") end
+    end
+end
+
+-- ============================================================
+-- MINING CORE  (verified – xem FLOW.md)
+-- ============================================================
+local skipUntil, ghostFails, pending = {}, {}, {}
+local hopVisited, oreHopTried = {}, {}
+
+local function BlockValid(b)
+    return b ~= nil and b.Part ~= nil and b.Part.Parent ~= nil
+end
+local idCache = setmetatable({}, { __mode = "k" })
+local function BlockId(b)
+    local c = idCache[b]
+    if c then return c end
+    local ok, dir = pcall(b.GetDirectory, b)
+    c = ok and dir and dir._id or "?"
+    if c ~= "?" then idCache[b] = c end
+    return c
+end
+local function BlockHP(b)
+    local ok, dir = pcall(b.GetDirectory, b)
+    return (ok and dir and dir.Strength or 1) * 10
+end
+local function BlockCenter(b)
+    local ok, cf = pcall(b.GetCFrame, b)
+    if ok and cf then return cf.Position end
+    return b.Part and b.Part.Position or Vector3.zero
+end
+local function IsOre(id) return (Config.Priority[id] or 1) >= 50 end
+-- block "quá chậm": HP / damage > Max Block Sec giây server -> bỏ qua (Amethyst ~5 phút). Block cần > HardFrames frame client
+-- vẫn đào được nhờ bot tự gửi commit (xem MineBlock).
+local BlockDamage -- định nghĩa bên dưới
+-- hardCache[id] = true chỉ khi bị ép bỏ (commit fail 6 lần); còn lại tính theo giây server (hardSec), tính lại mỗi 60 s
+-- vì damage đổi khi có pet mới (egg) / gold / rainbow / pickaxe mới. Block quest/gate đang cần được nới tới Quest Max Sec
+-- (acc mới: Scrap Pickaxe đào Sapphire ~29 s > Max Ore Sec 20 nhưng Quest 1 cần 1 Sapphire -> không nới thì kẹt mãi ở khu 1)
+local hardSec, hardLogged, hardSecAt = {}, {}, 0
+local function HardBlock(b, id)
+    if hardCache[id] == true then return true end
+    if not BlockDamage then return false end
+    if os.clock() - hardSecAt > 60 then hardSecAt = os.clock() table.clear(hardSec) end
+    local sec = hardSec[id]
+    if sec == nil then
+        local ok, dir = pcall(b.GetDirectory, b)
+        local hp = (ok and dir and dir.Strength or 1) * 10
+        local fps = math.max(20, tonumber(_UC["FPS"]) or 60)
+        local dmg = BlockDamage(b)
+        sec = hp / dmg
+        hardSec[id] = sec
+        hardFrames[id] = math.ceil(hp / (dmg / fps))
+    end
+    local maxSec = IsOre(id) and (tonumber(_UC["Max Ore Sec"]) or 400) or (tonumber(_UC["Max Block Sec"]) or 30)
+    local quest = (Bot.questNeeds and Bot.questNeeds[id]) or (Bot.gateNeeds and Bot.gateNeeds[id])
+    if quest then maxSec = math.max(maxSec, tonumber(_UC["Quest Max Sec"]) or 120) end
+    local c = sec > maxSec
+    local key = id .. (c and "-skip" or "-ok") .. (quest and "-q" or "")
+    if not hardLogged[key] then
+        hardLogged[key] = true
+        if c then Log("Block %s cần %.0f s -> quá chậm, bỏ qua", id, sec)
+        elseif hardFrames[id] > Config.HardFrames then Log("Block %s cần %d frame (%.1f s)%s -> giữ tích damage", id, hardFrames[id], sec, quest and " [quest]" or "") end
+    end
+    return c
+end
+local tierCache = {}
+local function BlockTier(b, id)
+    local c = tierCache[id]
+    if c then return c end
+    local ok, dir = pcall(b.GetDirectory, b)
+    c = ok and dir and tonumber(dir.Tier) or 1
+    tierCache[id] = c
+    return c
+end
+
+-- block chân thật: GetPlayerBlock nhảy y/y-1 ở ranh giới + có thể trả ghost
+local function GetFootPos(loc)
+    local pb = loc:GetPlayerBlock(lp)
+    if not pb then
+        -- GetPlayerBlock dùng BottomCFrame nhân vật: tuỳ avatar (R15 HipHeight ~2) chân nằm đúng mép block -> trả nil ~70 % thời gian
+        -- (VERIFIED 21/09 acc mới) -> tự tính từ HRP hạ 3 / 4.5 stud
+        local hrp = HRP()
+        if hrp then
+            for _, dy in ipairs({ -3, -4.5, -1.5 }) do
+                local ok, p = pcall(loc.WorldToBlockPos, loc, hrp.Position + Vector3.new(0, dy, 0))
+                if ok and p then pb = p break end
+            end
+        end
+        if not pb then return nil end
+    end
+    for y = pb.Y, pb.Y - 3, -1 do
+        local b = loc:GetBlock(Vector3int16.new(pb.X, y, pb.Z))
+        if b and not b.TempBroken and b.Part and b.Part.Parent then return b.Pos end
+    end
+    return pb
+end
+
+local function HopTo(b)
+    local hrp = HRP()
+    if not hrp then return false end
+    local dest = BlockCenter(b) + Vector3.new(0, 5.7, 0)
+    for attempt = 1, 3 do
+        hrp.CFrame = CFrame.new(dest)
+        task.wait(0.4)
+        hrp = HRP()
+        if hrp and (hrp.Position - dest).Magnitude < 12 then return true end
+        -- tele không ăn (đang rơi do bom / lag) -> thử lại
+        task.wait(0.3)
+    end
+    return false
+end
+
+local function PickTarget(loc, pb, reach)
+    reach = reach or Config.ReachStuds
+    local best, bestScore
+    local layerLeft = 0
+    local farBest, farScore, farCount = nil, nil, 0
+    local ghostBest
+    local now = os.clock()
+    local hrp = HRP()
+    local me = hrp and hrp.Position
+    local needs = Bot.questNeeds or {}
+    for _, b in pairs(loc.Blocks) do
+        if BlockValid(b) and (skipUntil[b] or 0) < now and not pending[b] then
+            local pos = b.Pos
+            local isFoot = pb and pos.X == pb.X and pos.Y == pb.Y and pos.Z == pb.Z
+            local id = (not isFoot and pb) and BlockId(b) or nil
+            if id and HardBlock(b, id) then id = nil end -- primitive không phá được -> bỏ qua (Auto Mine lo)
+            local ore = id and IsOre(id)
+            -- block thường: chỉ layer đang đứng (+ vành layer trên); ore: mọi layer từ pb.Y-1 trở lên (kể cả ore bỏ sót ở trên)
+            if id and ((pos.Y == pb.Y or pos.Y == pb.Y + 1) or ore) then -- ore: mọi layer (trong tầm đào luôn, ngoài tầm thì tele tới rồi quay về)
+                local pri = Config.Priority[id] or 1
+                if needs[id] then pri += Config.QuestBonus end
+                -- ore lâu (Amethyst/Rainbow > 10 s giữ target): xếp sau mọi ore nhanh và cả block thường trong tầm
+                local slowOre = ore and (hardFrames[id] or 0) / math.max(20, tonumber(_UC["FPS"]) or 60) > 10
+                if slowOre then pri = 0.5 end
+                local dist = me and (BlockCenter(b) - me).Magnitude or 0
+                -- ore luôn dùng tầm đầy đủ; block thường dùng tầm thu hẹp khi đang "đào xuống tìm đá quest"
+                if dist <= (ore and Config.ReachStuds or reach) then
+                    if b.TempBroken then
+                        -- ghost (client đoán vỡ nhưng Part còn): chỉ thử khi hết block thường
+                        if not ghostBest then ghostBest = b end
+                    else
+                        layerLeft += 1
+                        local score = pri * 1000 - dist / 5
+                        if not bestScore or score > bestScore then best, bestScore = b, score end
+                    end
+                elseif pos.Y == pb.Y or (ore and (_UC["Ore First"] or math.abs(pos.Y - pb.Y) <= 1)) then
+                    -- hop: block thường cùng layer; ore trong ±1 layer (Ore First: mọi layer) -> đi lấy rồi quay về
+                    farCount += 1
+                    local above = loc:GetBlock(Vector3int16.new(pos.X, pos.Y + 1, pos.Z))
+                    if not BlockValid(above) then
+                        local c = BlockCenter(b)
+                        local farFromVisited = true
+                        if not ore then
+                            for _, v in ipairs(hopVisited) do
+                                if v.y == pos.Y and (v.pos - c).Magnitude < Config.HopMinSpacing then farFromVisited = false break end
+                            end
+                        end
+                        -- ore xa luôn thắng block thường xa; trong cùng loại thì gần nhất
+                        local sc = (ore and (slowOre and 5e5 or 1e6) or 0) - dist
+                        if farFromVisited and (not farScore or sc > farScore) then farBest, farScore = b, sc end
+                    end
+                end
+            end
+        end
+    end
+    return best, layerLeft, farBest, farCount, ghostBest
+end
+
+-- đứng lên block lộ thiên cạnh b (để có line of sight tới ore bị che / ore ở xa)
+local function HopNear(loc, b)
+    local bp = b.Pos
+    local cand, cd
+    for dx = -2, 2 do
+        for dz = -2, 2 do
+            if dx ~= 0 or dz ~= 0 then
+                for _, dy in ipairs({ 0, -1 }) do
+                    local n = loc:GetBlock(Vector3int16.new(bp.X + dx, bp.Y + dy, bp.Z + dz))
+                    if BlockValid(n) and not n.TempBroken and not IsOre(BlockId(n)) then
+                        local above = loc:GetBlock(Vector3int16.new(n.Pos.X, n.Pos.Y + 1, n.Pos.Z))
+                        if not BlockValid(above) then
+                            local d = math.abs(dx) + math.abs(dz) + (dy == 0 and 0 or 0.5)
+                            if not cd or d < cd then cand, cd = n, d end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if cand then return HopTo(cand), false end
+    return HopTo(b), true -- không có chỗ đứng cạnh -> đứng lên chính ore đó (đào block chân)
+end
+
+-- ore gần nhất còn đào được (mọi layer) – cho chuỗi "sweep" ore
+local function NearestOre(loc)
+    local hrp = HRP()
+    if not hrp then return nil end
+    local now = os.clock()
+    local best, bd
+    for _, b in pairs(loc.Blocks) do
+        if BlockValid(b) and not b.TempBroken and (skipUntil[b] or 0) < now and not pending[b] then
+            local id = BlockId(b)
+            if IsOre(id) and not HardBlock(b, id) then
+                local d = (BlockCenter(b) - hrp.Position).Magnitude
+                if not bd or d < bd then best, bd = b, d end
+            end
+        end
+    end
+    return best, bd
+end
+
+-- block lộ thiên gần nhất ở layer pb.Y-1 .. pb.Y-maxDy (để nhảy xuống)
+local function FindExposedBelow(loc, pb, maxDy)
+    local hrp = HRP()
+    if not hrp then return nil end
+    for dy = 1, maxDy do
+        local below, bd
+        for _, b in pairs(loc.Blocks) do
+            if BlockValid(b) and not b.TempBroken and b.Pos.Y == pb.Y - dy then
+                local above = loc:GetBlock(Vector3int16.new(b.Pos.X, b.Pos.Y + 1, b.Pos.Z))
+                if not BlockValid(above) then
+                    -- ore là mesh to, đứng lên dễ trượt ra ngoài vùng -> ưu tiên block thường
+                    local d = (BlockCenter(b) - hrp.Position).Magnitude + (IsOre(BlockId(b)) and 1000 or 0)
+                    if not bd or d < bd then below, bd = b, d end
+                end
+            end
+        end
+        if below then return below end
+    end
+    return nil
+end
+
+-- block lộ thiên (không phải ore) gần nhân vật nhất ở mọi layer – để nhảy về khi bị văng ra ngoài vùng
+local function NearestExposedBlock(loc, maxDist, innerOnly)
+    local hrp = HRP()
+    if not hrp then return nil end
+    local best, bd
+    for _, b in pairs(loc.Blocks) do
+        -- innerOnly: cách mép vùng >= 2 block (vùng x/z -8..7) để không bị bom/mesh đẩy ra ngoài lần nữa
+        if BlockValid(b) and not b.TempBroken and (not innerOnly or (b.Pos.X >= -6 and b.Pos.X <= 5 and b.Pos.Z >= -6 and b.Pos.Z <= 5)) then
+            local above = loc:GetBlock(Vector3int16.new(b.Pos.X, b.Pos.Y + 1, b.Pos.Z))
+            if not BlockValid(above) then
+                local d = (BlockCenter(b) - hrp.Position).Magnitude + (IsOre(BlockId(b)) and 1000 or 0)
+                if d <= (maxDist or 1e9) and (not bd or d < bd) then best, bd = b, d end
+            end
+        end
+    end
+    return best
+end
+
+local lastTargetAt = 0
+local function SetTarget(loc, b)
+    lastTargetAt = os.clock()
+    local ok1 = pcall(loc.PlayerSetTarget, loc, lp, b.Pos, true)
+    local ok2 = pcall(loc.LocalSetTarget, loc, b)
+    return ok1 and ok2
+end
+
+local function Confirm(b, id, t0)
+    Stats.broken += 1
+    Stats.byId[id] = (Stats.byId[id] or 0) + 1
+    if IsOre(id) then Stats.ores += 1 end
+    Dbg("vỡ %-12s %s (%.2fs)", id, tostring(b.Pos), os.clock() - t0)
+end
+
+local function TrackPending()
+    local now = os.clock()
+    for b, info in pairs(pending) do
+        if not b.Part or b.Part.Parent == nil then
+            pending[b] = nil
+            Confirm(b, info.id, info.t0)
+        elseif now - info.t0 > Config.ConfirmTimeout then
+            pending[b] = nil
+            if not b.TempBroken then
+                Stats.rejected += 1
+                skipUntil[b] = now + Config.RejectRetry
+            else
+                ghostFails[b] = (ghostFails[b] or 0) + 1
+                skipUntil[b] = now + (ghostFails[b] >= Config.GhostMaxFails and 600 or Config.GhostSkip)
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- GIỮ ĐỂ PHÁ (VERIFIED 21/09): client tích damage mỗi frame vào loc.Players[lp].TargetDamage (ProcessLocalDamage);
+-- HP (Strength*10) về 0 -> client TỰ gửi ZJ_Commit + SimulateBreak, server xoá ngay (Dirt 0.37 s, Sapphire 28 s đều vỡ).
+-- Vấn đề cũ: MiningFrontend mỗi 0.1 s gọi LocalSetTarget(IsInputDown() and GetSelectedBlock() or nil) -> không giữ chuột
+-- thì target bị xoá, damage về 0 -> chỉ block <= ~7 frame vỡ được; commit thủ công sớm thì server không nhận với block lâu.
+-- Fix: patch 2 hàm đó (ToolCmds.BlockInteraction.GetSelectedBlock / MiningFrontend.GenericInput.IsInputDown) trả về block
+-- bot đang giữ -> frontend tự giữ target, tự swing pickaxe + LJ_Pulse như người chơi giữ chuột.
+-- ============================================================
+local PickaxeUtil_ComputeDamage = PickaxeUtil.ComputeDamage
+BlockDamage = function(b)
+    local ok, dir = pcall(b.GetDirectory, b)
+    if not ok or not dir then return 1 end
+    local sel = ToolUtil.GetSelectedTool(lp, "Pickaxe")
+    local best = ToolUtil.GetBestTool(lp, "Pickaxe")
+    local ok2, dmg = pcall(PickaxeUtil_ComputeDamage, lp, sel, best, dir)
+    if ok2 and tonumber(dmg) and dmg > 0 then return dmg end
+    local ok3, dmg3 = pcall(PickaxeUtil.GetPickaxeDamage, lp, dir)
+    return (ok3 and tonumber(dmg3) and dmg3 > 0) and dmg3 or 1
+end
+-- hàm gốc lưu ở getgenv (dùng chung mọi bản chạy) -> restart không bọc wrapper chồng wrapper, unpatch luôn về đúng hàm gốc
+getgenv()._SpaceMineOrig = getgenv()._SpaceMineOrig or {}
+local holdOrig = {}
+local function HoldPatch()
+    if holdOrig.done then return true end
+    local ok, err = pcall(function()
+        local BI = require(Client.ToolCmds:WaitForChild("BlockInteraction", 5))
+        local GI = require(Client.ToolCmds.MiningFrontend:WaitForChild("GenericInput", 5))
+        pcall(setreadonly, BI, false) pcall(setreadonly, GI, false)
+        local SO = getgenv()._SpaceMineOrig
+        SO.GetSelectedBlock = SO.GetSelectedBlock or BI.GetSelectedBlock
+        SO.IsInputDown = SO.IsInputDown or GI.IsInputDown
+        holdOrig.BI, holdOrig.GI = BI, GI
+        holdOrig.GetSelectedBlock, holdOrig.IsInputDown = SO.GetSelectedBlock, SO.IsInputDown
+        BI.GetSelectedBlock = function(...)
+            local h = Bot.hold
+            if h then return h end
+            return holdOrig.GetSelectedBlock(...)
+        end
+        GI.IsInputDown = function(...)
+            if Bot.hold then return true end
+            return holdOrig.IsInputDown(...)
+        end
+    end)
+    holdOrig.done = ok
+    if ok then Log("Hold patch: BlockInteraction.GetSelectedBlock + GenericInput.IsInputDown") else Log("Hold patch LỖI: %s", tostring(err)) end
+    return ok
+end
+local function HoldUnpatch()
+    Bot.hold = nil
+    if not holdOrig.done or not Latest() then return end -- bản mới hơn đang dùng patch -> không trả về gốc
+    pcall(function()
+        holdOrig.BI.GetSelectedBlock = holdOrig.GetSelectedBlock
+        holdOrig.GI.IsInputDown = holdOrig.IsInputDown
+    end)
+    holdOrig.done = false
+end
+local function MyTargetDamage(loc)
+    local me = loc.Players and loc.Players[lp]
+    return me and me.TargetDamage or 0, me and me.Target
+end
+-- sync=true: chờ server xoá Part (ore, ghost retry, block lâu). sync=false: client vỡ (TempBroken) là sang block kế, server xác nhận sau (pending)
+local function MineBlock(loc, b, sync)
+    local id = BlockId(b)
+    local hp = BlockHP(b)
+    local fps = math.max(20, tonumber(_UC["FPS"]) or 60)
+    local dmg = BlockDamage(b)
+    local frames = math.max(1, math.ceil(hp / (dmg / fps)))
+    local clientSec = hp / dmg -- client tích damage theo dt thật -> ~HP/dmg giây bất kể FPS
+    local hard = frames > Config.HardFrames
+    if clientSec > 3 then sync = true end -- block lâu (> 3 s): đứng chờ server xoá cho chắc; block ngắn xếp hàng pending để chồng lấp
+    local timeout = clientSec * 1.3 + 2
+    local t0 = os.clock()
+    local tBroken = nil
+    if b.TempBroken then sync = true; timeout = Config.ConfirmTimeout; tBroken = t0 end
+    Bot.target = b
+    Bot.hold = b
+    if not SetTarget(loc, b) then
+        Bot.hold = nil Bot.target = nil
+        skipUntil[b] = os.clock() + 30
+        return false
+    end
+    local lastDmg, lastDmgAt, lastUI = -1, t0, 0
+    while os.clock() - t0 < timeout do
+        if not Alive() then Bot.hold = nil Bot.target = nil return false end
+        if not b.Part or b.Part.Parent == nil then
+            Bot.hold = nil Bot.target = nil
+            Confirm(b, id, t0)
+            return true
+        end
+        if b.TempBroken then
+            -- client đã commit (HP về 0) -> server xoá sau ~0.1-0.3 s
+            tBroken = tBroken or os.clock()
+            Bot.hold = nil
+            if not sync then
+                RunService.Heartbeat:Wait()
+                if Config.PostBreakGap > 0 then task.wait(Config.PostBreakGap) end
+                Bot.target = nil
+                pending[b] = { t0 = tBroken, id = id }
+                return true
+            end
+            if os.clock() - tBroken > Config.ConfirmTimeout then
+                ghostFails[b] = (ghostFails[b] or 0) + 1
+                Bot.target = nil
+                skipUntil[b] = os.clock() + (ghostFails[b] >= Config.GhostMaxFails and 600 or Config.GhostSkip)
+                return false
+            end
+            task.wait()
+        else
+            RunService.Heartbeat:Wait()
+            local cur, tgt = MyTargetDamage(loc)
+            if tgt == nil or tgt ~= b.Pos then
+                -- target bị xoá (đổi tool / frontend) -> đặt lại; damage đã về 0 nhưng frontend giữ nên chỉ xảy ra khi bị che / ngoài tầm
+                pcall(loc.LocalSetTarget, loc, b)
+            end
+            if cur > lastDmg + 1e-6 then lastDmg, lastDmgAt = cur, os.clock() end
+            -- 0.6 s không tích thêm damage -> client không nhận target (bị che / ngoài tầm 41 stud) -> bỏ
+            if os.clock() - lastDmgAt > 0.6 then
+                Stats.occluded += 1
+                Bot.hold = nil Bot.target = nil
+                skipUntil[b] = os.clock() + 3
+                return false, "occluded"
+            end
+            if hard and os.clock() - lastUI > 1 then
+                lastUI = os.clock()
+                SetStatus(("giữ %s %d/%ds  zone %d y=%d"):format(id, math.floor(os.clock() - t0), math.ceil(clientSec), Stats.zone, Stats.layer))
+                if os.clock() - (Bot.lastUI or 0) > 1 then Bot.lastUI = os.clock() UpdateUI() end
+                -- block lâu: bị bom / rơi ra ngoài tầm hoặc mine reset -> huỷ
+                local h = HRP()
+                if loc.Respawning or not h or (BlockCenter(b) - h.Position).Magnitude > Config.ReachStuds + 2 then
+                    Bot.hold = nil Bot.target = nil
+                    skipUntil[b] = os.clock() + 5
+                    Dbg("Huỷ %s: ngoài tầm / reset", id)
+                    return false, "occluded"
+                end
+            end
+        end
+    end
+    Bot.hold = nil Bot.target = nil
+    if not b.TempBroken then
+        Stats.occluded += 1
+        Log("Giữ %s tại %s không vỡ sau %.0fs (damage %.1f/%d)", id, tostring(b.Pos), timeout, lastDmg, hp)
+        skipUntil[b] = os.clock() + 30
+        return false, "occluded"
+    end
+    skipUntil[b] = os.clock() + 30
+    return false
+end
+
+
+local function ReturnToTop(loc)
+    pcall(function()
+        local btn = lp.PlayerGui._INSTANCES[Config.InstanceName].Return
+        local f = getconnections(btn.Activated)[1].Function
+        local bus = debug.getupvalues(f)[1]
+        if bus and bus.Fire then bus.Fire("Mining Event: Went to top") end
+    end)
+    task.wait(2.5)
+    local hrp = HRP()
+    if hrp and loc and hrp.Position.Y < loc.Origin.Position.Y - 2 then
+        local top
+        for _, b in pairs(loc.Blocks) do
+            if BlockValid(b) and not b.TempBroken and b.Pos.Y == 0 then top = b break end
+        end
+        hrp.CFrame = top and (top:GetCFrame() + Vector3.new(0, 6, 0)) or (loc.Origin + Vector3.new(0, 6, 0))
+    end
+    hopVisited = {}
+end
+
+-- ============================================================
+-- MAIN LOOP
+-- ============================================================
+local function MainLoop()
+    ApplyOptimize()
+    CreateUI()
+    HideEggAnim()
+    HoldPatch()
+    MagnetPatch()
+    pcall(function() if AutoMineCmds.IsEnabled() then AutoMineCmds.Disable() Log("Tắt Auto Mine sót từ bản trước") end end)
+    Stats.coins0 = GetSpaceCoins()
+    Stats.pts0 = GetPoints()
+    CheckNewPets()
+    if _UC["Equip Best Pets"] then pcall(Network.Fire, "SM_Optimize") end
+    Log("Start. Target zone %s. Bấm %s để dừng.", tostring(_UC["Target Zone"]), tostring(_UC["Stop Key"].Name))
+
+    local idleSince = os.clock()
+    local lastHop, lastHopBroken = nil, -1
+    local lastStats, lastWebhook, lastPets = os.clock(), os.clock(), os.clock()
+    local respawnLogged = false
+    local idleStrikes, lastBrokenMark = 0, -1
+
     while Alive() do
-        local ok, err = pcall(function()
-            if not C["Enabled"] then S.status = "paused" task.wait(1) return end
-            if not EnsureInstance() then S.status = "ngoài event" task.wait(3) return end
-            local loc = GetLocal()
-            if loc ~= S.loc then S.locAt = os.clock() end -- vừa sang world mới -> RotateZone chờ block stream về rồi mới được kết luận "hết quặng"
-            S.loc = loc
-            local want = WantZone()
-            if not loc then
-                S.status = "tele khu " .. want
-                TeleZoneTop(want) return
-            end
-            if ZoneOf(loc) ~= want then
-                log("Chuyển sang khu %d", want)
-                TeleZoneTop(want) return
-            end
-            if loc.Respawning then
-                S.status = "mine reset"
-                if S.rotZone then log("Mine reset ở khu %d -> về khu %d", ZoneOf(loc), BaseZone()) S.rotZone = nil end -- reset -> về khu gốc quét lại từ đầu
-                task.wait(1) return
-            end
-            -- ngoài vùng mine (bị đẩy) -> về mặt khu
+        if not _UC["Enabled"] then SetStatus("paused") task.wait(1) continue end
+        if not EnsureInstance() then task.wait(3) continue end
+        if not EnsurePickaxe() then SetStatus("no pickaxe") task.wait(3) continue end
+
+        local loc = GetLocalWorld(8)
+        if not loc then
+            SetStatus("outside mine")
+            local want = math.min(math.clamp(tonumber(_UC["Target Zone"]) or 5, 1, 5), HighestUnlockedZone(), PickaxeZone())
+            Log("Không ở trong mine -> tele khu %d", want)
+            TeleportToZoneTop(want)
+            idleSince = os.clock()
+            continue
+        end
+        if Stats.zone ~= ZoneOf(loc) then idleSince = os.clock() end -- vừa đổi khu / vào mine: reset watchdog
+        Stats.zone = ZoneOf(loc)
+        -- đứng ngoài vùng mine của world mình (vd tele nhầm chỗ) -> về mặt khu đó
+        do
             local hrp = HRP()
             local inside = true
             if hrp then pcall(function() inside = loc:IsInsideXZ(hrp.Position) end) end
-            if not inside then TeleZoneTop(want) return end
-
-            DoCombine()
-            DoBomb(loc)
-            DoMerchant()
-            DoFreeGifts()
-
-            local fast, slow, total, buried, young, pendingAt = CollectOres(loc)
-            if #fast > 0 or #slow > 0 or young > 0 then S.emptySince = nil end -- còn quặng -> reset đồng hồ "mine chết"
-            if #fast >= (C["Min Ores"] or 3) then
-                local t0 = os.clock()
-                local n, why = Sweep(loc, fast)
-                dbg("Lượt: %d quặng / %.0fs (%s)", n, os.clock() - t0, tostring(why))
-                if n == 0 and why == "done" then S.status = "chờ quặng đang skip" task.wait(1) end -- còn quặng nhưng đều đang skip -> nghỉ, không quay tít
-            elseif #slow > 0 and C["Slow Last"] then
-                local n, why = Sweep(loc, slow)
-                if n == 0 and why == "done" then S.status = "chờ quặng đang skip" task.wait(1) end
-            elseif C["Dig Buried"] and DigBuried(loc) then
-                return -- quặng đã lộ -> vòng sau sweep lấy
-            elseif young > 0 then
-                S.status = ("chờ %d quặng mới load"):format(young) task.wait(0.5) -- mine respawn từng block: quặng non sắp đào được, không xoay khu
-            elseif pendingAt and pendingAt - os.clock() < 15 then
-                S.status = ("chờ quặng skip %.0fs"):format(pendingAt - os.clock()) task.wait(math.clamp(pendingAt - os.clock() + 0.1, 0.2, 1)) -- quặng ghost/che sắp hết skip -> đợi, không đổi khu
-            elseif C["Zone Rotate"] and RotateZone(loc) then
-                return -- world đổi, vòng sau lấy loc mới
-            elseif HopIfDead(loc, total) then
-                return -- đang teleport sang server khác
-            elseif C["Idle Mine"] then
-                local mined = IdleMine(loc, 20)
-                if mined == 0 then S.status = "chờ quặng" task.wait(C["Idle Wait"] or 5) end
-            else
-                S.status = "chờ quặng"
-                task.wait(C["Idle Wait"] or 5)
+            if not inside then
+                -- văng ra ngoài vùng (trượt khỏi mesh ore ở mép, bom đẩy...) -> nhảy về block gần nhất, giữ độ sâu; lặp 3 lần/15 s thì về mặt
+                if os.clock() - (Bot.outsideAt or 0) > 15 then Bot.outsideN = 0 end
+                Bot.outsideAt = os.clock()
+                Bot.outsideN = (Bot.outsideN or 0) + 1
+                -- lần 1-2: block gần nhất; từ lần 3: block trong lòng (cách mép >= 2), không về mặt (giữ độ sâu)
+                local near = (Bot.outsideN < 3 and NearestExposedBlock(loc, 120)) or NearestExposedBlock(loc, 1e9, true) or NearestExposedBlock(loc, 1e9)
+                if near then
+                    Log("Đang ngoài vùng khu %d -> nhảy về block %s", Stats.zone, tostring(near.Pos))
+                    HopTo(near)
+                else
+                    Log("Đang ngoài vùng khu %d -> tele về mặt", Stats.zone)
+                    TeleportToZoneTop(Stats.zone)
+                end
+                idleSince = os.clock()
+                continue
             end
-        end)
-        if not ok then log("Lỗi: %s", tostring(err)) task.wait(2) end
-        if os.clock() - lastReport > 120 then
-            lastReport = os.clock()
-            local el = os.clock() - S.stats.t0
-            log("=== %.0f phút | ore %d (%.0f/phút) blocks %d fail %d chôn %d hop %d | combine %d | coins %s", el / 60, S.stats.ore, S.stats.ore / el * 60, S.stats.blocks, S.stats.fail, S.stats.buried, S.stats.hops, S.stats.combines, FmtNum(SpaceCoins()))
         end
-        task.wait()
+
+        -- việc định kỳ
+        DoQuests()
+        if DoZones(loc) then idleSince = os.clock() continue end
+        DoUpgrades()
+        DoBoosters()
+        DoMerchant()
+        DoCombine()
+        if DoEggs(loc) then idleSince = os.clock() continue end -- sau chuyến egg/máy loc cũ có thể đã bị huỷ -> lấy lại
+        DoFreeGifts()
+        DoMail()
+        DoBombs(loc)
+        if os.clock() - lastPets > 5 then lastPets = os.clock() CheckNewPets() end
+        if os.clock() - lastStats > Config.StatsEvery then
+            lastStats = os.clock()
+            local el = math.max(1, os.clock() - Stats.start)
+            Log("=== %s | zone %d y=%d | blocks %d (%.0f/min) ore %d rej %d che %d | coins +%s pts +%s | eggs %d gold %d rb %d | %s",
+                FmtTime(el), Stats.zone, Stats.layer, Stats.broken, Stats.broken / el * 60, Stats.ores, Stats.rejected, Stats.occluded,
+                FmtNum(GetSpaceCoins() - Stats.coins0), FmtNum(GetPoints() - Stats.pts0), Stats.eggs, Stats.gold, Stats.rainbow, Stats.quest)
+        end
+        if os.clock() - lastWebhook > Config.WebhookEvery then
+            lastWebhook = os.clock()
+            local el = math.max(1, os.clock() - Stats.start)
+            SendWebhook("📊 Space Mine stats", ("Uptime %s\nZone %d, layer %d | Pickaxe %s\nBlocks %d (%.0f/min), ore %d\nSpace Coins %s (+%s)\nGems: M%d SR%d He%d Ne%d DM%d\nEggs %d | Gold %d | Rainbow %d\nQuest: %s"):format(
+                FmtTime(el), Stats.zone, Stats.layer, tostring(Stats.pickaxe), Stats.broken, Stats.broken / el * 60, Stats.ores,
+                FmtNum(GetSpaceCoins()), FmtNum(GetSpaceCoins() - Stats.coins0),
+                CountItem("Moonstone Gem"), CountItem("Star Ruby Gem"), CountItem("Helium-3 Gem"), CountItem("Nebulite Gem"), CountItem("Dark Matter Gem"),
+                Stats.eggs, Stats.gold, Stats.rainbow, Stats.quest))
+        end
+        if os.clock() - (Bot.lastUI or 0) > 1 then Bot.lastUI = os.clock() UpdateUI() end
+
+        -- mine đang reset
+        if loc.Respawning then
+            if not respawnLogged then Log("Mine đang reset -> chờ") respawnLogged = true end
+            SetStatus("mine resetting")
+            task.wait(1)
+            continue
+        elseif respawnLogged then
+            respawnLogged = false
+            hopVisited = {}
+            Log("Mine reset xong -> farm tiếp")
+        end
+
+        TrackPending()
+        local nPending = 0
+        for _ in pairs(pending) do nPending += 1 end
+        if nPending >= Config.MaxPending then task.wait(0.05) continue end
+
+        local pb = GetFootPos(loc)
+        if not pb then
+            task.wait(0.5)
+            pb = GetFootPos(loc)
+            if not pb then
+                local hrp = HRP()
+                local near, nd
+                for _, b in pairs(loc.Blocks) do
+                    if BlockValid(b) and not b.TempBroken and hrp then
+                        local c = BlockCenter(b)
+                        local d = (c - hrp.Position).Magnitude + ((hrp.Position.Y - c.Y) < 0 and 500 or 0)
+                        if not nd or d < nd then near, nd = b, d end
+                    end
+                end
+                if near then HopTo(near) end
+                continue
+            end
+        end
+        Stats.layer = pb.Y
+
+        -- AUTO MINE (game): quest cần đá không có ở layer này & không có block nào đang load -> để game đào xuống nhanh
+        do
+            local needs = Bot.questNeeds or {}
+            local amWant, amWhy = false, nil
+            local defer = _UC["Hard Rock Last"] and (Bot.questAnyLeft or 0) > 0 -- còn "any" -> farm rộng tầng mềm trước (trừ gate quest)
+            if _UC["Auto Mine Quest"] ~= false then
+                for id in pairs(needs) do
+                    if not IsOre(id) and not hardCache[id] and (not defer or (Bot.gateNeeds and Bot.gateNeeds[id])) then
+                        local seen = false
+                        for _, b in pairs(loc.Blocks) do
+                            if BlockValid(b) and BlockId(b) == id and math.abs(b.Pos.Y - pb.Y) <= 1 then seen = true break end
+                        end
+                        if not seen then amWant, amWhy = true, id end
+                    end
+                end
+            end
+            if amWant then
+                -- có Core Charge (khoan 20 layer thẳng xuống) -> dùng trước, nhanh hơn Auto Mine
+                if _UC["Auto Bomb"] and os.clock() - (Bot.coreAt or 0) > 15 and FindConsumableUID("Core Charge") then
+                    Bot.coreAt = os.clock()
+                    if UseBomb("Core Charge") then Log("Core Charge: khoan xuống tìm %s", amWhy) task.wait(4) idleSince = os.clock() continue end
+                end
+                local en = false
+                pcall(function() en = AutoMineCmds.IsEnabled() end)
+                if not en and os.clock() - (Bot.amEnableAt or 0) > 3 then
+                    Bot.amEnableAt = os.clock()
+                    -- Enable() gọi GetBlockUnderPlayer (= GetPlayerBlock, trả nil ~70 % frame với avatar này) -> "no block under foot"
+                    -- -> TeleportLocalPlayerToRandomBlock văng sang khu khác. Chờ đúng frame GetPlayerBlock có block rồi mới bật
+                    for _ = 1, 90 do
+                        local okp, p = pcall(loc.GetPlayerBlock, loc, lp)
+                        if okp and p then break end
+                        RunService.Heartbeat:Wait()
+                    end
+                    -- sau chuyến egg/máy (khu 1) GetLocal() có thể còn trả world khu 1 vài giây -> Enable lúc đó = random block khu 1
+                    if not SameWorld(loc) then Dbg("Auto Mine: world chưa khớp, chờ") task.wait(0.5) continue end
+                    local ok, err = pcall(AutoMineCmds.Enable)
+                    Log("Auto Mine ON (quest cần %s, không có ở layer y=%d) -> %s %s", amWhy, pb.Y, tostring(ok), tostring(err or ""))
+                    Bot.autoMineOn = true
+                    Bot.amLastY, Bot.amLastProgressAt = pb.Y, os.clock()
+                elseif en then
+                    -- watchdog: Auto Mine của game kẹt (mine reset đưa lên mặt nhưng target cũ còn ở sâu; hoặc đứng trên ore) -> 8 s không xuống layer nào thì bật lại
+                    if Bot.amLastY == nil or pb.Y < Bot.amLastY then Bot.amLastY, Bot.amLastProgressAt = pb.Y, os.clock() end
+                    local tgtY
+                    pcall(function() local me = loc.Players[lp] tgtY = me and me.Target and me.Target.Y end)
+                    -- target Auto Mine bình thường ở dưới chân 1-5 block; kẹt thật = target ở TRÊN (mine reset đưa lên mặt, target cũ ở sâu -> pb.Y > tgtY... nhưng
+                    -- pb reset về 0 nên tgtY < pb.Y - 8) hoặc 30 s không xuống (Ruby dưới chân 56 s là bình thường -> không tính)
+                    local tgtFar = tgtY and (tgtY < pb.Y - 8 or tgtY > pb.Y + 1)
+                    if os.clock() - (Bot.amLastProgressAt or 0) > 60 or tgtFar then
+                        Log("Auto Mine kẹt (y=%d %s) -> bật lại", pb.Y, tgtFar and ("target y=" .. tgtY) or "không xuống 60 s")
+                        pcall(AutoMineCmds.Disable)
+                        task.wait(0.6)
+                        for _ = 1, 90 do
+                            local okp, p = pcall(loc.GetPlayerBlock, loc, lp)
+                            if okp and p then break end
+                            RunService.Heartbeat:Wait()
+                        end
+                        if SameWorld(loc) then pcall(AutoMineCmds.Enable) end
+                        Bot.amLastY, Bot.amLastProgressAt = pb.Y, os.clock()
+                    end
+                end
+                SetStatus(("auto mine zone %d y=%d"):format(Stats.zone, pb.Y))
+                idleSince = os.clock()
+                task.wait(0.5)
+                continue
+            elseif Bot.autoMineOn then
+                pcall(AutoMineCmds.Disable)
+                Bot.autoMineOn = false
+                Log("Auto Mine OFF -> quay lại full-clear")
+            end
+        end
+
+        -- (fallback) quest cần đá mà layer này không có -> thu bán kính đào để xuống nhanh
+        local reach = Config.ReachStuds
+        local qr = tonumber(_UC["Quest Dig Radius"]) or 0
+        if _UC["Hard Rock Last"] and (Bot.questAnyLeft or 0) > 0 and not next(Bot.gateNeeds or {}) then qr = 0 end -- còn "any" -> không đào hẹp (trừ khi gate cần)
+        if qr > 0 then
+            local needs = Bot.questNeeds or {}
+            local rockNeed, seen = false, false
+            for id in pairs(needs) do if not IsOre(id) then rockNeed = true end end
+            if rockNeed then
+                for _, b in pairs(loc.Blocks) do
+                    if b.Pos.Y == pb.Y and BlockValid(b) and needs[BlockId(b)] then seen = true break end
+                end
+                if not seen then reach = qr end
+            end
+        end
+        if (reach < Config.ReachStuds) ~= (Bot.questDig == true) then
+            Bot.questDig = reach < Config.ReachStuds
+            Log(Bot.questDig and "Quest cần đá không có ở layer y=%d -> đào hẹp (r=%d) để xuống" or "Layer y=%d có đá quest -> vét đủ tầm", pb.Y, reach)
+        end
+        local target, layerLeft, farBest, farCount, ghostBest = PickTarget(loc, pb, reach)
+        if not target and ghostBest and not farBest then target = ghostBest end -- vét ghost cuối layer
+        local targetIsOre = target and IsOre(BlockId(target))
+        local farIsOre = farBest and IsOre(BlockId(farBest))
+        local hopsThisLayer = 0
+        for _, v in ipairs(hopVisited) do if v.y == pb.Y then hopsThisLayer += 1 end end
+        local hopLoop = farBest and lastHop == farBest and Stats.broken == lastHopBroken
+        -- ore xa: luôn được hop (không tính budget HopsPerLayer) -> không bỏ sót ore trên layer
+        -- đang đào hẹp tìm đá quest: không hop (kể cả ore) để không leo ra khỏi hố
+        local canHop = farBest ~= nil and not hopLoop and not Bot.questDig
+            and ((farIsOre and _UC["Hop Far Ore"] ~= false) or (not farIsOre and _UC["Hop Far Blocks"] and hopsThisLayer < Config.HopsPerLayer))
+        local wantDescend = not targetIsOre and layerLeft <= Config.DescendWhenLeft and not canHop
+        -- Ore First: có ore ngoài tầm mà trong tầm không có ore -> đi lấy ngay (đứng lại đó, lấy tiếp ore gần nhất)
+        local oreFirst = _UC["Ore First"] and farIsOre and not targetIsOre and not hopLoop and not Bot.questDig
+
+        if oreFirst then
+            if nPending > 0 then TrackPending() end
+            lastHop, lastHopBroken = farBest, Stats.broken
+            local hopped = HopNear(loc, farBest)
+            local h2 = HRP()
+            if hopped and h2 and (BlockCenter(farBest) - h2.Position).Magnitude <= Config.ReachStuds then
+                task.wait(0.1)
+                if MineBlock(loc, farBest, true) then idleSince = os.clock() end
+            else
+                skipUntil[farBest] = os.clock() + 60
+            end
+        elseif wantDescend then
+            if nPending > 0 then task.wait(0.1) continue end
+            local below = FindExposedBelow(loc, pb, 3)
+            if below then
+                SetStatus(("mining zone %d y=%d"):format(Stats.zone, below.Pos.Y))
+                Dbg("Layer y=%d xong -> xuống y=%d", pb.Y, below.Pos.Y)
+                hopVisited = { { y = below.Pos.Y, pos = BlockCenter(below) } }
+                HopTo(below)
+                idleSince = os.clock()
+            elseif target then
+                if MineBlock(loc, target, targetIsOre) then idleSince = os.clock() end
+            else
+                local atBottom = false
+                pcall(function() atBottom = loc:IsAtBottom() end)
+                if atBottom or os.clock() - idleSince > 8 then
+                    Log("Đáy / hết layer -> về mặt")
+                    SetStatus("return to top")
+                    ReturnToTop(loc)
+                    idleSince = os.clock()
+                else
+                    task.wait(0.5)
+                end
+            end
+        elseif target and not targetIsOre and _UC["Any On Top"] and pb.Y < -3 and (Bot.questAnyLeft or 0) > 0
+            and not next(Bot.gateNeeds or {}) and (hardFrames[BlockId(target)] or 0) / math.max(20, tonumber(_UC["FPS"]) or 60) > 0.5
+            and os.clock() - (Bot.topAt or 0) > 30 then
+            -- tầng chậm, không còn ore, quest chỉ cần đếm block -> lên mặt đào tầng nhanh
+            Bot.topAt = os.clock()
+            Log("Tầng y=%d block chậm (%s) -> về mặt farm tầng nhanh cho 'any'", pb.Y, BlockId(target))
+            SetStatus("return to top")
+            ReturnToTop(loc)
+            idleSince = os.clock()
+        elseif target then
+            SetStatus(("%s zone %d y=%d"):format(Bot.questDig and "digging" or "mining", Stats.zone, pb.Y))
+            local ok, why = MineBlock(loc, target, targetIsOre)
+            if ok then
+                idleSince = os.clock()
+            elseif why == "occluded" and targetIsOre and Bot.questDig then
+                skipUntil[target] = os.clock() + 15 -- đang đào hẹp: ore ngoài hố bị che -> bỏ qua, không hop ra
+            elseif why == "occluded" and targetIsOre and (oreHopTried[target] or 0) < 2 then
+                -- ore bị che: đứng sát nó rồi đào lại ngay (không chờ 3 s)
+                oreHopTried[target] = (oreHopTried[target] or 0) + 1
+                Dbg("Ore %s bị che -> hop sát", tostring(target.Pos))
+                local _, onTop = HopNear(loc, target)
+                skipUntil[target] = 0
+                if onTop then
+                    -- đứng trên chính ore: đào block chân (rơi 1 layer)
+                    if MineBlock(loc, target, true) then idleSince = os.clock() end
+                end
+            elseif why == "occluded" and targetIsOre then
+                skipUntil[target] = os.clock() + 30 -- đã hop 2 lần vẫn che -> bỏ qua lâu hơn
+            end
+        elseif canHop then
+            if nPending > 0 then task.wait(0.1) continue end
+            Dbg("Hop %d/%d tới %s%s (còn %d xa)", hopsThisLayer + 1, Config.HopsPerLayer, tostring(farBest.Pos), farIsOre and " (ore)" or "", farCount)
+            lastHop, lastHopBroken = farBest, Stats.broken
+            if farIsOre then
+                -- đi lấy ore xa (kể cả layer trên) rồi quay về chỗ đang đứng để không bỏ dở layer
+                local h = HRP()
+                local backCF = h and h.CFrame
+                -- sweep: đi lấy ore gần nhất, rồi từ đó lấy tiếp ore gần nhất... (không tele về giữa chừng), xong mới quay về
+                local cur, cd, n = farBest, nil, 0
+                while cur and n < 80 and Bot.running and not loc.Respawning do
+                    local h2 = HRP()
+                    local dist = h2 and (BlockCenter(cur) - h2.Position).Magnitude or 1e9
+                    if dist > Config.ReachStuds then
+                        if not HopNear(loc, cur) then skipUntil[cur] = os.clock() + 60 cur = nil break end
+                        h2 = HRP()
+                        dist = h2 and (BlockCenter(cur) - h2.Position).Magnitude or 1e9
+                    end
+                    if dist <= Config.ReachStuds then
+                        local okO = MineBlock(loc, cur, true)
+                        if okO then idleSince = os.clock() n += 1 else skipUntil[cur] = math.max(skipUntil[cur] or 0, os.clock() + 20) end
+                    else
+                        skipUntil[cur] = os.clock() + 60
+                    end
+                    cur, cd = NearestOre(loc)
+                end
+                if n > 1 then Dbg("Sweep ore: %d cục", n) end
+                if backCF and HRP() then HRP().CFrame = backCF task.wait(0.4) end
+            else
+                table.insert(hopVisited, { y = farBest.Pos.Y, pos = BlockCenter(farBest) })
+                HopTo(farBest)
+            end
+            idleSince = os.clock()
+        else
+            task.wait(0.5)
+        end
+
+        if os.clock() - idleSince > 25 then
+            idleStrikes = (idleStrikes or 0) + 1
+            if idleStrikes == 1 then
+                -- thử lại tại chỗ trước: xoá bảng skip/pending/hop rồi quét lại
+                Log("25s không đào được gì -> reset bảng skip, thử lại")
+                skipUntil, ghostFails, pending, hopVisited, oreHopTried = {}, {}, {}, {}, {}
+            else
+                Log("Vẫn không đào được -> về mặt")
+                ReturnToTop(loc)
+                idleStrikes = 0
+            end
+            idleSince = os.clock()
+        elseif idleStrikes and os.clock() - idleSince < 5 and Stats.broken > (lastBrokenMark or -1) then
+            idleStrikes = 0
+        end
+        lastBrokenMark = Stats.broken
+    end
+    SetStatus("stopped")
+    if Bot.running and not Latest() then Bot.Stop("bản mới hơn đang chạy") end
+    Log("Stopped.")
+end
+
+-- ============================================================
+-- Stop / start
+-- ============================================================
+function Bot.Stop(reason)
+    Bot.running = false
+    pcall(function() if AutoMineCmds.IsEnabled() then AutoMineCmds.Disable() end end)
+    Bot.target = nil
+    HoldUnpatch()
+    MagnetUnpatch()
+    pcall(function() if antiAfkConn then antiAfkConn:Disconnect() end end)
+    pcall(function() for _, c in ipairs(eggAnimConns) do c:Disconnect() end end)
+    pcall(function() if gui then gui:Destroy() end end)
+    pcall(function() RunService:Set3dRenderingEnabled(true) end)
+    Log("Stop (%s)", tostring(reason))
+end
+
+UIS.InputBegan:Connect(function(input, gp)
+    if not gp and input.KeyCode == _UC["Stop Key"] then Bot.Stop("stop key") end
+end)
+
+task.spawn(function()
+    while Alive() do
+        local ok, err = pcall(MainLoop)
+        if not ok then
+            Log("CRASH: %s -> restart sau 3s", tostring(err))
+            task.wait(3)
+        else
+            break
+        end
     end
 end)
